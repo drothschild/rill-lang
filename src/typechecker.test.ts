@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { infer } from "./typechecker";
+import { infer, createPreludeTypeEnv } from "./typechecker";
 import { parse } from "./parser";
 import { lex } from "./lexer";
 import { prettyType, resetTypeVarCounter, Type } from "./types";
@@ -221,6 +221,133 @@ describe("Type Inference", () => {
       expect(() => {
         infer(parse(lex("let x = {a: 1} in x.b")));
       }).toThrow(/No field/);
+    });
+  });
+
+  describe("Prelude type environment", () => {
+    // Custom typeToString that renders TResult(x) as Result(<x>) (single-arg)
+    function typeToString(t: Type, varNames: Map<number, string>): string {
+      switch (t.kind) {
+        case "TCon":
+          return t.name;
+        case "TVar": {
+          const name = varNames.get(t.id);
+          if (name) return name;
+          // First appearance: assign the next letter
+          const nextLetter = String.fromCharCode(97 + varNames.size); // 'a', 'b', etc.
+          varNames.set(t.id, nextLetter);
+          return nextLetter;
+        }
+        case "TFn": {
+          const paramStr = typeToString(t.param, varNames);
+          const retStr = typeToString(t.ret, varNames);
+          // Wrap param in parens if it's an arrow type
+          const wrappedParam = t.param.kind === "TFn" ? `(${paramStr})` : paramStr;
+          return `${wrappedParam} -> ${retStr}`;
+        }
+        case "TList": {
+          const elemStr = typeToString(t.element, varNames);
+          return `List(${elemStr})`;
+        }
+        case "TResult": {
+          const okStr = typeToString(t.ok, varNames);
+          return `Result(${okStr})`;
+        }
+        case "TTuple": {
+          const elemStrs = t.elements.map(e => typeToString(e, varNames));
+          return `(${elemStrs.join(", ")})`;
+        }
+        case "TRecord":
+          return "[Record]"; // Simplified for prelude tests
+        case "TTag":
+          return `[Tag: ${t.tag}]`; // Simplified for prelude tests
+      }
+    }
+
+    function schemeToString(scheme: { vars: number[]; type: Type }): string {
+      const varNames = new Map<number, string>();
+      // Assign letters based on sorted var IDs to ensure consistent naming
+      const sortedVars = [...scheme.vars].sort((a, b) => a - b);
+      for (let i = 0; i < sortedVars.length; i++) {
+        varNames.set(sortedVars[i], String.fromCharCode(97 + i));
+      }
+      return typeToString(scheme.type, varNames);
+    }
+
+    // AC5.1: Canonical schemes render correctly
+    it("AC5.1: map renders as (a -> b) -> List(a) -> List(b)", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      const scheme = env.get("map");
+      expect(scheme).toBeDefined();
+      const rendered = schemeToString(scheme!);
+      expect(rendered).toBe("(a -> b) -> List(a) -> List(b)");
+    });
+
+    it("AC5.1: filter renders as (a -> Bool) -> List(a) -> List(a)", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      const scheme = env.get("filter");
+      expect(scheme).toBeDefined();
+      const rendered = schemeToString(scheme!);
+      expect(rendered).toBe("(a -> Bool) -> List(a) -> List(a)");
+    });
+
+    it("AC5.1: fold renders as b -> (b -> a -> b) -> List(a) -> b", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      const scheme = env.get("fold");
+      expect(scheme).toBeDefined();
+      const rendered = schemeToString(scheme!);
+      expect(rendered).toBe("b -> (b -> a -> b) -> List(a) -> b");
+    });
+
+    it("AC5.1: head renders as List(a) -> Result(a)", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      const scheme = env.get("head");
+      expect(scheme).toBeDefined();
+      const rendered = schemeToString(scheme!);
+      expect(rendered).toBe("List(a) -> Result(a)");
+    });
+
+    it("AC5.1: tail renders as List(a) -> Result(List(a))", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      const scheme = env.get("tail");
+      expect(scheme).toBeDefined();
+      const rendered = schemeToString(scheme!);
+      expect(rendered).toBe("List(a) -> Result(List(a))");
+    });
+
+    // AC5.2: str_len type
+    it("AC5.2: str_len exists in prelude type env and has type String -> Int", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(env.has("str_len")).toBe(true);
+      const scheme = env.get("str_len");
+      expect(scheme).toBeDefined();
+      const rendered = schemeToString(scheme!);
+      expect(rendered).toBe("String -> Int");
+    });
+
+    // AC5.3: length rejects String argument at type level
+    it("AC5.3: length typed as List(a) -> Int rejects String argument", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex('length("hello")')), env)).toThrow();
+    });
+
+    it("AC5.3: str_len accepts String argument", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex('str_len("hello")')), env)).not.toThrow();
+    });
+
+    it("AC5.3: length accepts List argument", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex("length([1, 2, 3])")), env)).not.toThrow();
     });
   });
 });
