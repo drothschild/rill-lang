@@ -235,8 +235,20 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
       const resolved = applySubst(s1, recT);
       if (resolved.kind === "TRecord") {
         const fieldT = resolved.fields.get(expr.field);
-        if (!fieldT) throw new TypeError(`No field ${expr.field} in record`);
-        return [fieldT, s1];
+        if (fieldT) return [fieldT, s1];
+        // Field absent. If the record is OPEN, grow its row to include the field.
+        if (resolved.rest !== null) {
+          const grownField = freshTypeVar();
+          const constraint: Type = {
+            kind: "TRecord",
+            fields: new Map([[expr.field, grownField]]),
+            rest: freshTypeVar(),
+          };
+          const s2 = unify(resolved, constraint, s1);
+          return [applySubst(s2, grownField), s2];
+        }
+        // CLOSED record and field is missing → reject, with a source-located error.
+        throw typeError(`No field ${expr.field} in record`, expr.span);
       }
       if (resolved.kind === "TVar") {
         // Create a record type constraint with the accessed field
