@@ -60,7 +60,12 @@ function occursIn(id: number, t: Type, subst: Substitution): boolean {
   if (t.kind === "TList") return occursIn(id, t.element, subst);
   if (t.kind === "TTuple") return t.elements.some((el) => occursIn(id, el, subst));
   if (t.kind === "TResult") return occursIn(id, t.ok, subst);
-  if (t.kind === "TRecord") return [...t.fields.values()].some((v) => occursIn(id, v, subst));
+  if (t.kind === "TRecord") {
+    return (
+      [...t.fields.values()].some((v) => occursIn(id, v, subst)) ||
+      (t.rest !== null && occursIn(id, t.rest, subst))
+    );
+  }
   return false;
 }
 
