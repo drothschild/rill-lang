@@ -84,9 +84,38 @@ describe("Row unification", () => {
     }
 
     // r2 was bound to the shared tail (no extras to absorb from t1)
-    // The key verification: unify() succeeded without throwing, proving shared field 'a' unified at Int
-    const r2Resolved = applySubst(subst, r2);
-    expect(r2Resolved).toBeDefined();
+    // Verify symmetric unification: shared field 'a' unified at Int, extras absorbed into tails
+    const t1Resolved = applySubst(subst, t1);
+    const t2Resolved = applySubst(subst, t2);
+
+    // Both should be TRecord
+    expect(t1Resolved.kind).toBe("TRecord");
+    expect(t2Resolved.kind).toBe("TRecord");
+
+    if (t1Resolved.kind === "TRecord" && t2Resolved.kind === "TRecord") {
+      // Both must have shared field 'a' as Int — proves unification of common field succeeded
+      expect(t1Resolved.fields.has("a")).toBe(true);
+      expect(t2Resolved.fields.has("a")).toBe(true);
+      expect(t1Resolved.fields.get("a")).toEqual({ kind: "TCon", name: "Int" });
+      expect(t2Resolved.fields.get("a")).toEqual({ kind: "TCon", name: "Int" });
+
+      // t2 has field 'b' directly (it was in original t2)
+      expect(t2Resolved.fields.has("b")).toBe(true);
+      expect(t2Resolved.fields.get("b")).toEqual({ kind: "TCon", name: "String" });
+
+      // r1 (t1's rest) must have absorbed b: String
+      // Apply substitution to r1 (which is t1Resolved.rest)
+      const r1Resolved = t1Resolved.rest ? applySubst(subst, t1Resolved.rest) : null;
+      expect(r1Resolved?.kind).toBe("TRecord");
+      if (r1Resolved?.kind === "TRecord") {
+        expect(r1Resolved.fields.has("b")).toBe(true);
+        expect(r1Resolved.fields.get("b")).toEqual({ kind: "TCon", name: "String" });
+      }
+
+      // r2 was bound to the shared tail (unbound TVar); verify it's a TVar
+      const r2Resolved = applySubst(subst, r2);
+      expect(r2Resolved.kind).toBe("TVar");
+    }
   });
 
   it("AC3.2: disjoint extra fields absorbed by each side's tail", () => {
