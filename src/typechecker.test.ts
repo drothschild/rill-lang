@@ -335,7 +335,7 @@ describe("Type Inference", () => {
     it("AC5.3: length typed as List(a) -> Int rejects String argument", () => {
       resetTypeVarCounter();
       const env = createPreludeTypeEnv();
-      expect(() => infer(parse(lex('length("hello")')), env)).toThrow();
+      expect(() => infer(parse(lex('length("hello")')), env)).toThrow(/unify/i);
     });
 
     it("AC5.3: str_len accepts String argument", () => {
