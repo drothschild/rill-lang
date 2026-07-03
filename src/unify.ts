@@ -1,4 +1,4 @@
-import { Type } from "./types";
+import { Type, freshTypeVar } from "./types";
 
 export type Substitution = Map<number, Type>;
 
@@ -36,10 +36,24 @@ export function unify(t1: Type, t2: Type, subst: Substitution = new Map()): Subs
   }
 
   if (t1.kind === "TRecord" && t2.kind === "TRecord") {
+    // Leijen "scoped labels" row unification.
+    // 1. Unify fields present on BOTH sides pairwise; collect one-side-only fields.
+    const only1 = new Map<string, Type>(); // in t1, not in t2
+    const only2 = new Map<string, Type>(); // in t2, not in t1
     for (const [k, v] of t1.fields) {
       const other = t2.fields.get(k);
       if (other) subst = unify(v, other, subst);
+      else only1.set(k, v);
     }
+    for (const [k, v] of t2.fields) {
+      if (!t1.fields.has(k)) only2.set(k, v);
+    }
+
+    // 2 & 3. Push one-side-only fields into the OTHER side's row tail, sharing a fresh tail.
+    // t1's extra fields (only1) must be absorbed by t2's tail; t2's extras (only2) by t1's tail.
+    const sharedTail = freshTypeVar();
+    subst = unifyRowTail(t1.rest, only2, sharedTail, subst);
+    subst = unifyRowTail(t2.rest, only1, sharedTail, subst);
     return subst;
   }
 
@@ -51,6 +65,34 @@ function bindVar(id: number, t: Type, subst: Substitution): Substitution {
   if (occursIn(id, t, subst)) throw new TypeError("infinite type");
   subst.set(id, t);
   return subst;
+}
+
+// Unify a record's row tail against "the fields the other record has that this one lacks,
+// plus a shared residual tail". A null tail means a CLOSED record: it may only match when it
+// is asked to provide no extra fields.
+function unifyRowTail(
+  rest: Type | null,
+  missingFields: Map<string, Type>,
+  sharedTail: Type,
+  subst: Substitution
+): Substitution {
+  if (rest === null) {
+    // Closed record: cannot grow. If the other side demands fields we don't have, fail.
+    if (missingFields.size > 0) {
+      throw new TypeError(
+        `record is missing field(s): ${[...missingFields.keys()].join(", ")}`
+      );
+    }
+    // No extra fields required; the shared tail is therefore the empty closed row.
+    return unify(sharedTail, { kind: "TRecord", fields: new Map(), rest: null }, subst);
+  }
+  // Open record: its tail must equal {missingFields | sharedTail}
+  // (or just sharedTail when there are no missing fields).
+  const target: Type =
+    missingFields.size === 0
+      ? sharedTail
+      : { kind: "TRecord", fields: missingFields, rest: sharedTail };
+  return unify(rest, target, subst);
 }
 
 function occursIn(id: number, t: Type, subst: Substitution): boolean {
