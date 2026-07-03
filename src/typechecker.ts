@@ -10,7 +10,7 @@ interface Scheme {
   type: Type;
 }
 
-type TypeEnv = Map<string, Scheme>;
+export type TypeEnv = Map<string, Scheme>;
 
 function mono(t: Type): Scheme {
   return { vars: [], type: t };
@@ -514,4 +514,13 @@ export function createPreludeTypeEnv(): TypeEnv {
   }
 
   return env;
+}
+
+// Bind a concrete (monomorphic) input type under `name` in a copy of `env`.
+// Used by embedders to declare rule input signatures. Does not generalize:
+// the signature type is fixed, not polymorphic.
+export function bindType(env: TypeEnv, name: string, t: Type): TypeEnv {
+  const next = new Map(env);
+  next.set(name, mono(t));
+  return next;
 }
