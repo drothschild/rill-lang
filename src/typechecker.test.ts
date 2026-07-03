@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { infer } from "./typechecker";
 import { parse } from "./parser";
 import { lex } from "./lexer";
-import { prettyType, resetTypeVarCounter } from "./types";
+import { prettyType, resetTypeVarCounter, Type } from "./types";
+import { applySubst } from "./unify";
 
 function typeOf(source: string): string {
   resetTypeVarCounter();
@@ -154,6 +155,73 @@ describe("Type Inference", () => {
       } catch (e: any) {
         expect(e.message).toContain("Result");
       }
+    });
+  });
+
+  describe("Open field access", () => {
+    // Helper to flatten a nested record type by walking the rest chain
+    function flattenRecord(t: Type): Map<string, Type> {
+      const result = new Map<string, Type>();
+      let current: Type | null = t;
+      while (current) {
+        if (current.kind === "TRecord") {
+          for (const [k, v] of current.fields) {
+            result.set(k, v);
+          }
+          current = current.rest;
+        } else {
+          // Stop at TVar or other types
+          break;
+        }
+      }
+      return result;
+    }
+
+    it("AC4.1: open record accretes a second field via row tail", () => {
+      resetTypeVarCounter();
+      const result = infer(parse(lex("fn(r) -> r.a + r.b + 1")));
+
+      // Should infer as fn type
+      expect(result.kind).toBe("TFn");
+
+      const param = result.param;
+      expect(param.kind).toBe("TRecord");
+
+      // Flatten the record to get all fields including those in rest chain
+      const fields = flattenRecord(param);
+
+      // Both a and b should be present and Int
+      expect(fields.has("a")).toBe(true);
+      expect(fields.has("b")).toBe(true);
+      expect(fields.get("a")).toEqual({ kind: "TCon", name: "Int" });
+      expect(fields.get("b")).toEqual({ kind: "TCon", name: "Int" });
+
+      // The record should be open (rest chain should exist or be a TVar)
+      expect(param.rest).not.toBeNull();
+
+      // Return type should be Int
+      expect(result.ret).toEqual({ kind: "TCon", name: "Int" });
+    });
+
+    it("AC4.2: polymorphic accessor used at two different shapes", () => {
+      resetTypeVarCounter();
+      // let get_a = fn(r) -> r.a in get_a({a: 1, b: 2}) + get_a({a: 3, c: "x"})
+      const source = 'let get_a = fn(r) -> r.a in get_a({a: 1, b: 2}) + get_a({a: 3, c: "x"})';
+
+      // This should type-check without throwing
+      // The polymorphic accessor's row variable instantiates differently per call site
+      expect(() => {
+        resetTypeVarCounter();
+        infer(parse(lex(source)));
+      }).not.toThrow();
+    });
+
+    it("AC4.3: missing field on closed record throws No field error", () => {
+      resetTypeVarCounter();
+      // Closed record literal {a: 1} only has field a, accessing b should fail
+      expect(() => {
+        infer(parse(lex("let x = {a: 1} in x.b")));
+      }).toThrow(/No field/);
     });
   });
 });
