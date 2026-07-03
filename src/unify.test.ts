@@ -57,7 +57,7 @@ describe("Row unification", () => {
   it("AC3.1: unifies shared field, absorbs one-side-only field into tail", () => {
     // { a: Int | r1 } with { a: Int, b: String | r2 }
     const r1 = freshTypeVar() as { kind: "TVar"; id: number };
-    const r2 = freshTypeVar();
+    const r2 = freshTypeVar() as { kind: "TVar"; id: number };
     const t1: Type = {
       kind: "TRecord",
       fields: new Map([["a", { kind: "TCon", name: "Int" }]]),
@@ -74,7 +74,7 @@ describe("Row unification", () => {
 
     const subst = unify(t1, t2);
 
-    // r1 should have absorbed b: String
+    // r1 should have absorbed b: String from t2 (t2 has no r1 extras to absorb)
     const r1Resolved = applySubst(subst, r1);
     expect(r1Resolved.kind).toBe("TRecord");
     if (r1Resolved.kind === "TRecord") {
@@ -82,6 +82,11 @@ describe("Row unification", () => {
       const bType = r1Resolved.fields.get("b");
       expect(bType).toEqual({ kind: "TCon", name: "String" });
     }
+
+    // r2 was bound to the shared tail (no extras to absorb from t1)
+    // The key verification: unify() succeeded without throwing, proving shared field 'a' unified at Int
+    const r2Resolved = applySubst(subst, r2);
+    expect(r2Resolved).toBeDefined();
   });
 
   it("AC3.2: disjoint extra fields absorbed by each side's tail", () => {
@@ -131,7 +136,7 @@ describe("Row unification", () => {
       rest: r2,
     };
 
-    expect(() => unify(t1, t2)).toThrow();
+    expect(() => unify(t1, t2)).toThrow(/Int|String/);
   });
 
   it("AC3.3b: occurs-check prevents infinite record type through rest", () => {
@@ -144,5 +149,51 @@ describe("Row unification", () => {
     };
 
     expect(() => unify(r, infiniteRecord)).toThrow(/infinite type/);
+  });
+
+  it("closed record with no missing fields unifies with open record tail resolving to empty closed row", () => {
+    // { a: Int } CLOSED vs { a: Int | r } OPEN
+    // r should unify to { } CLOSED (empty record with rest: null)
+    const r = freshTypeVar() as { kind: "TVar"; id: number };
+    const closedRecord: Type = {
+      kind: "TRecord",
+      fields: new Map([["a", { kind: "TCon", name: "Int" }]]),
+      rest: null,
+    };
+    const openRecord: Type = {
+      kind: "TRecord",
+      fields: new Map([["a", { kind: "TCon", name: "Int" }]]),
+      rest: r,
+    };
+
+    const subst = unify(closedRecord, openRecord);
+
+    // r should resolve to empty closed record
+    const rResolved = applySubst(subst, r);
+    expect(rResolved.kind).toBe("TRecord");
+    if (rResolved.kind === "TRecord") {
+      expect(rResolved.fields.size).toBe(0);
+      expect(rResolved.rest).toBe(null);
+    }
+  });
+
+  it("closed record with missing required field throws error", () => {
+    // { a: Int } CLOSED vs { a: Int, b: String } CLOSED
+    // Should throw because closed record cannot provide b
+    const closedRecord1: Type = {
+      kind: "TRecord",
+      fields: new Map([["a", { kind: "TCon", name: "Int" }]]),
+      rest: null,
+    };
+    const closedRecord2: Type = {
+      kind: "TRecord",
+      fields: new Map([
+        ["a", { kind: "TCon", name: "Int" }],
+        ["b", { kind: "TCon", name: "String" }],
+      ]),
+      rest: null,
+    };
+
+    expect(() => unify(closedRecord1, closedRecord2)).toThrow(/missing field/);
   });
 });
