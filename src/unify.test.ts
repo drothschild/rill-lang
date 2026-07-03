@@ -50,3 +50,99 @@ describe("Unification", () => {
     expect(() => unify(a, { kind: "TList", element: a })).toThrow("infinite");
   });
 });
+
+describe("Row unification", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("AC3.1: unifies shared field, absorbs one-side-only field into tail", () => {
+    // { a: Int | r1 } with { a: Int, b: String | r2 }
+    const r1 = freshTypeVar() as { kind: "TVar"; id: number };
+    const r2 = freshTypeVar();
+    const t1: Type = {
+      kind: "TRecord",
+      fields: new Map([["a", { kind: "TCon", name: "Int" }]]),
+      rest: r1,
+    };
+    const t2: Type = {
+      kind: "TRecord",
+      fields: new Map([
+        ["a", { kind: "TCon", name: "Int" }],
+        ["b", { kind: "TCon", name: "String" }],
+      ]),
+      rest: r2,
+    };
+
+    const subst = unify(t1, t2);
+
+    // r1 should have absorbed b: String
+    const r1Resolved = applySubst(subst, r1);
+    expect(r1Resolved.kind).toBe("TRecord");
+    if (r1Resolved.kind === "TRecord") {
+      expect(r1Resolved.fields.has("b")).toBe(true);
+      const bType = r1Resolved.fields.get("b");
+      expect(bType).toEqual({ kind: "TCon", name: "String" });
+    }
+  });
+
+  it("AC3.2: disjoint extra fields absorbed by each side's tail", () => {
+    // { a: Int | r1 } with { b: String | r2 }
+    const r1 = freshTypeVar() as { kind: "TVar"; id: number };
+    const r2 = freshTypeVar() as { kind: "TVar"; id: number };
+    const t1: Type = {
+      kind: "TRecord",
+      fields: new Map([["a", { kind: "TCon", name: "Int" }]]),
+      rest: r1,
+    };
+    const t2: Type = {
+      kind: "TRecord",
+      fields: new Map([["b", { kind: "TCon", name: "String" }]]),
+      rest: r2,
+    };
+
+    const subst = unify(t1, t2);
+
+    // r1 should have absorbed b: String
+    const r1Resolved = applySubst(subst, r1);
+    expect(r1Resolved.kind).toBe("TRecord");
+    if (r1Resolved.kind === "TRecord") {
+      expect(r1Resolved.fields.has("b")).toBe(true);
+    }
+
+    // r2 should have absorbed a: Int
+    const r2Resolved = applySubst(subst, r2);
+    expect(r2Resolved.kind).toBe("TRecord");
+    if (r2Resolved.kind === "TRecord") {
+      expect(r2Resolved.fields.has("a")).toBe(true);
+    }
+  });
+
+  it("AC3.3a: fails when shared field has conflicting types", () => {
+    // { a: Int | r1 } with { a: String | r2 }
+    const r1 = freshTypeVar();
+    const r2 = freshTypeVar();
+    const t1: Type = {
+      kind: "TRecord",
+      fields: new Map([["a", { kind: "TCon", name: "Int" }]]),
+      rest: r1,
+    };
+    const t2: Type = {
+      kind: "TRecord",
+      fields: new Map([["a", { kind: "TCon", name: "String" }]]),
+      rest: r2,
+    };
+
+    expect(() => unify(t1, t2)).toThrow();
+  });
+
+  it("AC3.3b: occurs-check prevents infinite record type through rest", () => {
+    // r should not unify with { a: Int | r } (infinite record)
+    const r = freshTypeVar();
+    const infiniteRecord: Type = {
+      kind: "TRecord",
+      fields: new Map([["a", { kind: "TCon", name: "Int" }]]),
+      rest: r,
+    };
+
+    expect(() => unify(r, infiniteRecord)).toThrow(/infinite type/);
+  });
+});
