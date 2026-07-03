@@ -3,7 +3,6 @@ import { infer } from "./typechecker";
 import { parse } from "./parser";
 import { lex } from "./lexer";
 import { prettyType, resetTypeVarCounter, Type } from "./types";
-import { applySubst } from "./unify";
 
 function typeOf(source: string): string {
   resetTypeVarCounter();
