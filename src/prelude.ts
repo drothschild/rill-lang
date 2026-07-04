@@ -44,6 +44,11 @@ export function createPrelude(): Map<string, Value> {
     throw new Error("length expects List or String");
   }));
 
+  env.set("str_len", builtin("str_len", 1, ([s]) => {
+    if (s.kind !== "String") throw new Error("str_len expects String");
+    return { kind: "Int", value: s.value.length };
+  }));
+
   env.set("head", builtin("head", 1, ([list]) => {
     assertList(list);
     if (list.elements.length === 0) return { kind: "Tag", tag: "Err", args: [{ kind: "String", value: "empty list" }] };

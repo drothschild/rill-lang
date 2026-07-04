@@ -10,7 +10,7 @@ interface Scheme {
   type: Type;
 }
 
-type TypeEnv = Map<string, Scheme>;
+export type TypeEnv = Map<string, Scheme>;
 
 function mono(t: Type): Scheme {
   return { vars: [], type: t };
@@ -235,8 +235,20 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
       const resolved = applySubst(s1, recT);
       if (resolved.kind === "TRecord") {
         const fieldT = resolved.fields.get(expr.field);
-        if (!fieldT) throw new TypeError(`No field ${expr.field} in record`);
-        return [fieldT, s1];
+        if (fieldT) return [fieldT, s1];
+        // Field absent. If the record is OPEN, grow its row to include the field.
+        if (resolved.rest !== null) {
+          const grownField = freshTypeVar();
+          const constraint: Type = {
+            kind: "TRecord",
+            fields: new Map([[expr.field, grownField]]),
+            rest: freshTypeVar(),
+          };
+          const s2 = unify(resolved, constraint, s1);
+          return [applySubst(s2, grownField), s2];
+        }
+        // CLOSED record and field is missing → reject, with a source-located error.
+        throw typeError(`No field ${expr.field} in record`, expr.span);
       }
       if (resolved.kind === "TVar") {
         // Create a record type constraint with the accessed field
@@ -432,4 +444,83 @@ function inferPattern(pattern: import("./ast").Pattern, subst: Substitution): [T
       return [{ kind: "TRecord", fields, rest: freshTypeVar() }, bindings, s];
     }
   }
+}
+
+export function createPreludeTypeEnv(): TypeEnv {
+  const env: TypeEnv = new Map();
+
+  const tcon = (name: string): Type => ({ kind: "TCon", name });
+  const tlist = (element: Type): Type => ({ kind: "TList", element });
+  const tresult = (ok: Type): Type => ({ kind: "TResult", ok });
+  // Curried arrow: tfn(A, B, C) === A -> B -> C
+  const tfn = (...ts: Type[]): Type =>
+    ts.reduceRight((ret, param) => ({ kind: "TFn", param, ret }));
+  // Quantify ALL free vars of `t` (empty env → generalizes everything).
+  const scheme = (t: Type): Scheme => generalize(new Map(), t, new Map());
+
+  const Int = tcon("Int");
+  const Str = tcon("String");
+  const Bool = tcon("Bool");
+  const Unit = tcon("Unit");
+
+  // map : (a -> b) -> List(a) -> List(b)
+  {
+    const a = freshTypeVar(), b = freshTypeVar();
+    env.set("map", scheme(tfn(tfn(a, b), tlist(a), tlist(b))));
+  }
+  // filter : (a -> Bool) -> List(a) -> List(a)
+  {
+    const a = freshTypeVar();
+    env.set("filter", scheme(tfn(tfn(a, Bool), tlist(a), tlist(a))));
+  }
+  // fold : b -> (b -> a -> b) -> List(a) -> b
+  {
+    const a = freshTypeVar(), b = freshTypeVar();
+    env.set("fold", scheme(tfn(b, tfn(b, a, b), tlist(a), b)));
+  }
+  // each : (a -> Unit) -> List(a) -> Unit
+  {
+    const a = freshTypeVar();
+    env.set("each", scheme(tfn(tfn(a, Unit), tlist(a), Unit)));
+  }
+  // length : List(a) -> Int
+  {
+    const a = freshTypeVar();
+    env.set("length", scheme(tfn(tlist(a), Int)));
+  }
+  // str_len : String -> Int
+  env.set("str_len", scheme(tfn(Str, Int)));
+  // head : List(a) -> Result(a)
+  {
+    const a = freshTypeVar();
+    env.set("head", scheme(tfn(tlist(a), tresult(a))));
+  }
+  // tail : List(a) -> Result(List(a))
+  {
+    const a = freshTypeVar();
+    env.set("tail", scheme(tfn(tlist(a), tresult(tlist(a)))));
+  }
+  // concat : String -> String -> String
+  env.set("concat", scheme(tfn(Str, Str, Str)));
+  // to_string : a -> String
+  {
+    const a = freshTypeVar();
+    env.set("to_string", scheme(tfn(a, Str)));
+  }
+  // print : a -> Unit
+  {
+    const a = freshTypeVar();
+    env.set("print", scheme(tfn(a, Unit)));
+  }
+
+  return env;
+}
+
+// Bind a concrete (monomorphic) input type under `name` in a copy of `env`.
+// Used by embedders to declare rule input signatures. Does not generalize:
+// the signature type is fixed, not polymorphic.
+export function bindType(env: TypeEnv, name: string, t: Type): TypeEnv {
+  const next = new Map(env);
+  next.set(name, mono(t));
+  return next;
 }

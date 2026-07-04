@@ -35,3 +35,22 @@ export function prettyType(t: Type): string {
     case "TTag": return t.args.length === 0 ? t.tag : `${t.tag}(${t.args.map(prettyType).join(", ")})`;
   }
 }
+
+// Public, consumer-facing type constructors. The ONLY sanctioned way for embedders
+// to name Rill types when declaring rule input signatures.
+export const T = {
+  String: { kind: "TCon", name: "String" } as Type,
+  Int: { kind: "TCon", name: "Int" } as Type,
+  Bool: { kind: "TCon", name: "Bool" } as Type,
+  Unit: { kind: "TCon", name: "Unit" } as Type,
+  list(element: Type): Type {
+    return { kind: "TList", element };
+  },
+  record(fields: Record<string, Type>, open = false): Type {
+    return {
+      kind: "TRecord",
+      fields: new Map(Object.entries(fields)),
+      rest: open ? freshTypeVar() : null,
+    };
+  },
+};

@@ -78,6 +78,16 @@ describe("Prelude", () => {
     });
   });
 
+  describe("str_len", () => {
+    it("returns string length", () => {
+      expect(runPrint('str_len("hello")')).toBe("5");
+    });
+
+    it("returns correct length for empty string", () => {
+      expect(runPrint('str_len("")')).toBe("0");
+    });
+  });
+
   describe("pipeline composition", () => {
     it("chains filter, map, and fold", () => {
       expect(runPrint(`
