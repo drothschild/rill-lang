@@ -195,6 +195,51 @@ describe("Evaluator", () => {
     });
   });
 
+  describe("if/then/else", () => {
+    it("takes the then branch when true", () => {
+      expect(runPrint("if true then 1 else 2")).toBe("1");
+    });
+
+    it("takes the else branch when false", () => {
+      expect(runPrint("if false then 1 else 2")).toBe("2");
+    });
+
+    it("evaluates the condition expression", () => {
+      expect(runPrint('if 2 > 1 then "yes" else "no"')).toBe('"yes"');
+    });
+
+    it("chains else-if", () => {
+      expect(runPrint(`
+        let x = 5 in
+        if x > 10 then "big"
+        else if x > 3 then "mid"
+        else "small"
+      `)).toBe('"mid"');
+    });
+
+    it("only evaluates the taken branch", () => {
+      // The untaken branch would divide by... nothing observable here;
+      // use a match that would fail if evaluated
+      expect(runPrint('if true then 1 else match 0 { 1 -> 2 }')).toBe("1");
+    });
+
+    it("binds a trailing pipe into the else branch", () => {
+      expect(runPrint("let double = fn n -> n * 2 in if false then 1 else 10 |> double")).toBe("20");
+    });
+
+    it("does not apply a trailing pipe to the then branch", () => {
+      expect(runPrint("let double = fn n -> n * 2 in if true then 1 else 10 |> double")).toBe("1");
+    });
+
+    it("pipes the whole if when parenthesized", () => {
+      expect(runPrint("let double = fn n -> n * 2 in (if true then 1 else 10) |> double")).toBe("2");
+    });
+
+    it("throws when the condition is not a Bool", () => {
+      expect(() => run("if 1 then 2 else 3")).toThrow(/If condition must be Bool/);
+    });
+  });
+
   describe("structural equality", () => {
     it("compares lists", () => {
       expect(runPrint("[1, 2] == [1, 2]")).toBe("true");

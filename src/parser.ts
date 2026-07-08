@@ -109,6 +109,10 @@ class Parser {
       case TokenKind.Match: {
         return this.parseMatch();
       }
+      // If expression
+      case TokenKind.If: {
+        return this.parseIf();
+      }
       // List literal
       case TokenKind.LBracket: {
         const lbracket = this.advance();
@@ -325,6 +329,32 @@ class Parser {
     this.expect(TokenKind.Arrow);
     const body = this.parseExpr(0);
     return { pattern, body };
+  }
+
+  parseIf(): Expr {
+    const ifToken = this.expect(TokenKind.If);
+    const cond = this.parseExpr(0);
+    if (!this.at(TokenKind.Then)) {
+      const t = this.peek();
+      throw new Error(`Expected 'then' after if condition, but got ${t.kind} at line ${t.span.start.line}, col ${t.span.start.col}`);
+    }
+    this.advance();
+    // Branches parse greedily (minBp 0), so a trailing |> binds inside the
+    // else branch — same as let-in bodies. Parenthesize the if to pipe its result.
+    const then = this.parseExpr(0);
+    if (!this.at(TokenKind.Else)) {
+      const t = this.peek();
+      throw new Error(`Expected 'else' after then-branch ('if' is an expression, so else is required), but got ${t.kind} at line ${t.span.start.line}, col ${t.span.start.col}`);
+    }
+    this.advance();
+    const else_ = this.parseExpr(0);
+    return {
+      kind: "If",
+      cond,
+      then,
+      else_,
+      span: { start: ifToken.span.start, end: else_.span.end },
+    };
   }
 
   parsePattern(): import("./ast").Pattern {

@@ -80,6 +80,39 @@ let area = fn(shape) -> match shape {
 in area(Rect(3, 4))   -- => 12
 ```
 
+### If/Then/Else
+`if` is an expression, so `else` is always required — every `if` produces a value. Both branches must have the same type, and chained `else if` nests naturally:
+```
+let x = 5 in
+if x > 10 then "big"
+else if x > 3 then "mid"
+else "small"
+-- => "mid"
+```
+
+Rules that used to encode conditions as a match on a tuple of booleans read better with `if`. Before:
+```
+-- Injected: job (Record), is_active (Bool)
+{
+  follow_up_due: match (is_active, job.follow_up_date_passed) {
+    (true, true) -> true,
+    _ -> false
+  }
+}
+```
+After:
+```
+{
+  follow_up_due: if is_active then job.follow_up_date_passed else false
+}
+```
+
+Branches parse greedily, so a trailing `|>` binds inside the `else` branch (just like `let ... in` bodies). Parenthesize the `if` to pipe its result:
+```
+if c then a else b |> f     -- pipes b into f, then picks a or (b |> f)
+(if c then a else b) |> f   -- pipes the chosen value into f
+```
+
 ### Data Structures
 ```
 [1, 2, 3]                    -- Lists

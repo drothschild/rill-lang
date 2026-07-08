@@ -125,6 +125,32 @@ describe("Type Inference", () => {
     });
   });
 
+  describe("if/then/else types", () => {
+    it("infers the branch type", () => {
+      expect(typeOf("if true then 1 else 2")).toBe("Int");
+    });
+
+    it("infers String branches", () => {
+      expect(typeOf('if true then "a" else "b"')).toBe("String");
+    });
+
+    it("infers a function over if", () => {
+      expect(typeOf("fn x -> if x then 1 else 2")).toBe("Bool -> Int");
+    });
+
+    it("rejects a non-Bool condition", () => {
+      expect(() => typeOf("if 1 then 2 else 3")).toThrow(/unify/i);
+    });
+
+    it("rejects branches that do not unify", () => {
+      expect(() => typeOf('if true then 1 else "x"')).toThrow(/unify/i);
+    });
+
+    it("infers chained else-if", () => {
+      expect(typeOf('if true then "a" else if false then "b" else "c"')).toBe("String");
+    });
+  });
+
   describe("type errors", () => {
     it("rejects Int + String", () => {
       expect(() => typeOf('5 + "hello"')).toThrow();
