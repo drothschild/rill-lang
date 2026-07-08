@@ -11,7 +11,6 @@ let transition = fn(state, event) ->
     (Unlocked, Push) -> Next(Locked, "Pushed through: locked!"),
     (Unlocked, Coin) -> Next(Unlocked, "Extra coin: already unlocked.")
   }
-in
 
 -- Convert a state tag to a string
 let show_state = fn(s) ->
@@ -19,29 +18,25 @@ let show_state = fn(s) ->
     Locked -> "Locked",
     Unlocked -> "Unlocked"
   }
-in
 
 -- Recursively process a list of events
 let rec run = fn(state, events) ->
-  match length(events) == 0 {
-    true -> state,
-    false ->
-      let event = head(events)? in
-      let result = transition(state, event) in
-      match result {
-        Next(new_state, msg) ->
-          let p1 = print(msg) in
-          let remaining = tail(events)? in
-          run(new_state, remaining)
-      }
-  }
-in
+  if length(events) == 0 then state
+  else
+    let event = head(events)?
+    let result = transition(state, event)
+    match result {
+      Next(new_state, msg) ->
+        let _ = print(msg)
+        let remaining = tail(events)?
+        run(new_state, remaining)
+    }
 
-let p1 = print("=== Turnstile State Machine ===") in
-let p2 = print("Start: " ++ show_state(Locked)) in
+let _ = print("=== Turnstile State Machine ===")
+let _ = print("Start: " ++ show_state(Locked))
 
-let events = [Coin, Push, Push, Coin, Coin, Push] in
-let final = run(Locked, events) in
+let events = [Coin, Push, Push, Coin, Coin, Push]
+let final = run(Locked, events)
 
-let p3 = print("Final state: " ++ show_state(final)) in
+let _ = print("Final state: " ++ show_state(final))
 print("=== Done! ===")
