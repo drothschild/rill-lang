@@ -17,30 +17,26 @@ let inline = fn(node) ->
     Italic(text) -> "*" ++ text ++ "*",
     _ -> to_string(node)
   }
-in
 
 -- Render a numbered list: fold to track the index
 let render_numbered = fn(items) ->
-  (fold(1, fn(n, item) -> (let p1 = print(to_string(n) ++ ". " ++ item) in n + 1), items))
-in
+  (fold(1, fn(n, item) -> (let _ = print(to_string(n) ++ ". " ++ item) n + 1), items))
 
 -- Render a block-level node, returning Ok/Err for error handling
 let render = fn(node) ->
   match node {
-    H1(text) -> (let p1 = print("# " ++ text) in Ok(())),
-    H2(text) -> (let p1 = print("## " ++ text) in Ok(())),
-    H3(text) -> (let p1 = print("### " ++ text) in Ok(())),
-    Text(text) -> (let p1 = print(text) in Ok(())),
-    BulletList(items) -> (let p1 = each(fn(item) -> print("- " ++ item), items) in Ok(())),
-    NumberedList(items) -> (let p1 = render_numbered(items) in Ok(())),
+    H1(text) -> (let _ = print("# " ++ text) Ok(())),
+    H2(text) -> (let _ = print("## " ++ text) Ok(())),
+    H3(text) -> (let _ = print("### " ++ text) Ok(())),
+    Text(text) -> (let _ = print(text) Ok(())),
+    BulletList(items) -> (let _ = each(fn(item) -> print("- " ++ item), items) Ok(())),
+    NumberedList(items) -> (let _ = render_numbered(items) Ok(())),
     _ -> Err("unrecognized node")
   }
-in
 
 -- Render a full document, catching errors per node
 let render_doc = fn(nodes) ->
   each(fn(node) -> (render(node)? |> fn(v) -> v |> catch e -> print("Error: " ++ e)), nodes)
-in
 
 -- Build a sample document
 let doc = [
@@ -51,8 +47,8 @@ let doc = [
   H2("Steps"),
   NumberedList(["Parse", "Render", "Print"]),
   Strikethrough("oops")
-] in
+]
 
-let p1 = print("=== Markdown Renderer ===") in
-let p2 = render_doc(doc) in
+let _ = print("=== Markdown Renderer ===")
+let _ = render_doc(doc)
 print("=== Done! ===")

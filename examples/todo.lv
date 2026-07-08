@@ -6,7 +6,7 @@ let todos = [
   { title: "Write a demo", status: Todo },
   { title: "Share with friends", status: Todo },
   { title: "Build something cool", status: Todo }
-] in
+]
 
 -- Format a todo with a checkbox
 let format_todo = fn(t) ->
@@ -14,58 +14,50 @@ let format_todo = fn(t) ->
     Done -> "[x] " ++ t.title,
     Todo -> "[ ] " ++ t.title
   }
-in
 
--- Mark a todo as complete by title
+-- Mark a todo as complete by title (record punning: title is the param)
 let complete = fn(title, todos) ->
-  (todos |> map(fn(t) -> match t.title == title {
-    true -> { title: t.title, status: Done },
-    false -> t
-  }))
-in
+  (todos |> map(fn(t) -> if t.title == title then { title, status: Done } else t))
 
 -- Count helpers
 let count_done = fn(todos) ->
-  (todos |> filter(fn(t) -> match t.status { Done -> true, Todo -> false }) |> length)
-in
+  (todos |> count(fn(t) -> match t.status { Done -> true, Todo -> false }))
 
 let count_pending = fn(todos) ->
-  (todos |> filter(fn(t) -> match t.status { Todo -> true, Done -> false }) |> length)
-in
+  (todos |> count(fn(t) -> match t.status { Todo -> true, Done -> false }))
 
 -- Print all todos
-let p1 = print("=== Rill Todo App ===") in
-let p2 = print("") in
-let p3 = print("All todos:") in
-let p4 = todos |> map(format_todo) |> each(print) in
-let p5 = print("") in
-let p6 = print("Done: " ++ to_string(count_done(todos)) ++ " | Pending: " ++ to_string(count_pending(todos))) in
-let p7 = print("") in
+let _ = print("=== Rill Todo App ===")
+let _ = print("")
+let _ = print("All todos:")
+let _ = todos |> map(format_todo) |> each(print)
+let _ = print("")
+let _ = print("Done: " ++ to_string(count_done(todos)) ++ " | Pending: " ++ to_string(count_pending(todos)))
+let _ = print("")
 
 -- Filter to pending items
-let pending = todos |> filter(fn(t) -> match t.status { Todo -> true, Done -> false }) in
-let p8 = print("Pending items:") in
-let p9 = pending |> map(format_todo) |> each(print) in
-let p10 = print("") in
+let pending = todos |> filter(fn(t) -> match t.status { Todo -> true, Done -> false })
+let _ = print("Pending items:")
+let _ = pending |> map(format_todo) |> each(print)
+let _ = print("")
 
 -- Safely get the first pending item with error handling
-let p11 = print("Next up:") in
-let p12 = pending |> head? |> fn(t) -> print("  " ++ format_todo(t)) |> catch e -> print("  No pending items!") in
-let p13 = print("") in
+let _ = print("Next up:")
+let _ = pending |> head? |> fn t -> print("  " ++ format_todo(t)) |> catch _ -> print("  No pending items!")
+let _ = print("")
 
 -- Mark "Write a demo" as complete
-let updated = todos |> complete("Write a demo") in
-let p14 = print("After completing 'Write a demo':") in
-let p15 = updated |> map(format_todo) |> each(print) in
-let p16 = print("") in
-let p17 = print("Done: " ++ to_string(count_done(updated)) ++ " | Pending: " ++ to_string(count_pending(updated))) in
-let p18 = print("") in
+let updated = todos |> complete("Write a demo")
+let _ = print("After completing 'Write a demo':")
+let _ = updated |> map(format_todo) |> each(print)
+let _ = print("")
+let _ = print("Done: " ++ to_string(count_done(updated)) ++ " | Pending: " ++ to_string(count_pending(updated)))
+let _ = print("")
 
 -- Build a summary with fold
 let summary = updated
   |> map(format_todo)
   |> fold("", fn(acc, line) -> acc ++ line ++ " | ")
-in
-let p19 = print("Summary: " ++ summary) in
 
+let _ = print("Summary: " ++ summary)
 print("=== Done! ===")

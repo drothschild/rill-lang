@@ -17,15 +17,11 @@ let rec eval = fn(expr) ->
     Mul(a, b) -> (eval(a)? * eval(b)? |> fn(r) -> Ok(r)),
     Neg(a) -> (0 - eval(a)? |> fn(r) -> Ok(r)),
     Div(a, b) -> (
-      let bv = eval(b)? in
-      match bv == 0 {
-        true -> Err("division by zero"),
-        false -> Ok(eval(a)? / bv)
-      }
+      let bv = eval(b)?
+      if bv == 0 then Err("division by zero") else Ok(eval(a)? / bv)
     ),
     _ -> Err("unknown expression")
   }
-in
 
 -- Pretty-print an expression as a human-readable string
 let rec show = fn(expr) ->
@@ -37,34 +33,27 @@ let rec show = fn(expr) ->
     Div(a, b) -> show(a) ++ " / " ++ show(b),
     _ -> "unknown"
   }
-in
 
 -- Format an evaluation result
 let format_result = fn(expr) ->
   ((eval(expr)? |> fn(v) -> show(expr) ++ " = " ++ to_string(v)) |> catch e -> show(expr) ++ " = Error: " ++ e)
-in
 
-let p1 = print("=== Expression Evaluator ===") in
-let p2 = print("") in
+let _ = print("=== Expression Evaluator ===")
+let _ = print("")
 
 -- Simple: 2 + 3
-let e1 = Add(Num(2), Num(3)) in
-let p3 = print(format_result(e1)) in
+let _ = print(format_result(Add(Num(2), Num(3))))
 
 -- Nested: (2 + 3) * -(4)
-let e2 = Mul(Add(Num(2), Num(3)), Neg(Num(4))) in
-let p4 = print(format_result(e2)) in
+let _ = print(format_result(Mul(Add(Num(2), Num(3)), Neg(Num(4)))))
 
 -- Division by zero
-let e3 = Div(Num(10), Num(0)) in
-let p5 = print(format_result(e3)) in
+let _ = print(format_result(Div(Num(10), Num(0))))
 
 -- Successful division
-let e4 = Div(Num(10), Num(3)) in
-let p6 = print(format_result(e4)) in
+let _ = print(format_result(Div(Num(10), Num(3))))
 
 -- Unknown expression
-let e5 = "not an expression" in
-let p7 = print(format_result(e5)) in
+let _ = print(format_result("not an expression"))
 
 print("=== Done! ===")
