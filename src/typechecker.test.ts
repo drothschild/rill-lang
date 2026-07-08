@@ -350,4 +350,73 @@ describe("Type Inference", () => {
       expect(() => infer(parse(lex("length([1, 2, 3])")), env)).not.toThrow();
     });
   });
+
+  describe("operator operand constraints", () => {
+    describe("arithmetic requires numeric operands", () => {
+      it("rejects String +", () => {
+        expect(() => typeOf('"a" + "b"')).toThrow();
+      });
+
+      it("rejects Bool *", () => {
+        expect(() => typeOf("true * false")).toThrow();
+      });
+
+      it("accepts Float arithmetic", () => {
+        expect(typeOf("1.5 + 2.5")).toBe("Float");
+        expect(typeOf("5.5 % 2.5")).toBe("Float");
+      });
+
+      it("accepts Int arithmetic", () => {
+        expect(typeOf("10 % 3")).toBe("Int");
+      });
+
+      it("still rejects mixed Int/Float arithmetic", () => {
+        expect(() => typeOf("1 + 2.5")).toThrow();
+      });
+
+      it("defaults polymorphic arithmetic operands to Int", () => {
+        expect(typeOf("fn(a, b) -> a + b")).toBe("Int -> Int -> Int");
+      });
+    });
+
+    describe("ordering requires Int, Float, or String", () => {
+      it("rejects Bool <", () => {
+        expect(() => typeOf("true < false")).toThrow();
+      });
+
+      it("rejects List <", () => {
+        expect(() => typeOf("[1] < [2]")).toThrow();
+      });
+
+      it("accepts String ordering", () => {
+        expect(typeOf('"a" < "b"')).toBe("Bool");
+      });
+
+      it("accepts mixed Int/Float ordering", () => {
+        expect(typeOf("1 < 2.5")).toBe("Bool");
+      });
+    });
+
+    describe("equality accepts any non-function type", () => {
+      it("accepts Unit equality", () => {
+        expect(typeOf("() == ()")).toBe("Bool");
+      });
+
+      it("accepts List equality", () => {
+        expect(typeOf("[1, 2] == [1, 2]")).toBe("Bool");
+      });
+
+      it("accepts Result equality", () => {
+        expect(typeOf("Ok(1) == Ok(1)")).toBe("Bool");
+      });
+
+      it("accepts mixed Int/Float equality", () => {
+        expect(typeOf("1 == 2.5")).toBe("Bool");
+      });
+
+      it("rejects function equality", () => {
+        expect(() => typeOf("let f = fn(x) -> x + 1 in f == f")).toThrow(/function/);
+      });
+    });
+  });
 });
