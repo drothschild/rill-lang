@@ -2,7 +2,10 @@
 export { evaluate } from './evaluator';
 export { createPrelude } from './prelude';
 export { lex } from './lexer';
-export { parse } from './parser';
+export { parse, parseProgram } from './parser';
+export type { Program, RuleHeader, RuleParam } from './parser';
+export { checkRuleSource } from './rules';
+export type { RuleCheckResult } from './rules';
 export { Value, prettyPrint } from './values';
 export { runSource } from './runner';
 

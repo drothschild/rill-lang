@@ -228,6 +228,38 @@ Semantics notes:
 - Arithmetic requires numeric operands (`"a" + "b"` is a type error — use `++` to join strings); comparisons accept `Int`, `Float`, or `String`.
 - Integer `/` truncates toward zero; `/` and `%` by zero raise a positioned runtime error.
 
+## Rule Headers
+
+A rule file can declare its own input contract with a `rule` header, so embedders
+can type-check every rule at load time without maintaining an external signature
+registry:
+
+```
+rule alerts(
+  job: { current_stage: String, follow_up_date_passed: Bool, days_since_update: Int, .. },
+  alert_threshold: Int
+) -> { is_active: Bool, follow_up_due: Bool, no_response: Bool }
+
+let is_active = !one_of(job.current_stage, ["Rejected", "Offer"])
+{
+  is_active,
+  follow_up_due: is_active && job.follow_up_date_passed,
+  no_response: is_active && job.days_since_update > alert_threshold
+}
+```
+
+Type annotations cover `Int`, `Float`, `String`, `Bool`, `Unit`, `List(T)`,
+`Result(T)`, tuples `(A, B)`, and record types. A trailing `..` in a record type
+marks an open row (the injected record may carry extra fields); without it the
+record is closed and reading undeclared fields is a type error. The return type
+(`-> Type`) is optional; when present, the body's inferred type must unify with it.
+
+Embedders check a rule with `checkRuleSource(source)`, which returns
+`{ ok, errors, header }` and never throws. The header's params are the exact
+environment the host must inject at evaluation time; evaluate a headed file by
+parsing with `parseProgram` and evaluating `program.body`. Headerless files are
+unaffected — `parse` and `evaluate` work exactly as before.
+
 ## Architecture
 
 Five-phase pipeline:

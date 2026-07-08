@@ -18,6 +18,7 @@ export enum TokenKind {
   If = "If",
   Then = "Then",
   Else = "Else",
+  Rule = "Rule",
 
   // Identifiers
   Ident = "Ident",
@@ -53,6 +54,7 @@ export enum TokenKind {
   RBracket = "RBracket",
   Comma = "Comma",
   Dot = "Dot",
+  DotDot = "DotDot",
   Colon = "Colon",
   Underscore = "Underscore",
 
