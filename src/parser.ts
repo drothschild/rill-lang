@@ -36,6 +36,16 @@ class Parser {
     return this.peek().kind === kind;
   }
 
+  // A binder is an identifier or _ (a wildcard the body cannot reference,
+  // since _ is not a valid expression).
+  expectBinder(): string {
+    const token = this.peek();
+    if (token.kind !== TokenKind.Ident && token.kind !== TokenKind.Underscore) {
+      throw new Error(`Expected Ident or _ but got ${token.kind} at line ${token.span.start.line}, col ${token.span.start.col}`);
+    }
+    return this.advance().lexeme;
+  }
+
   eat(kind: TokenKind): Token | null {
     if (this.at(kind)) return this.advance();
     return null;
@@ -125,7 +135,7 @@ class Parser {
       // Catch expression
       case TokenKind.Catch: {
         const catchToken = this.advance();
-        const errorName = this.expect(TokenKind.Ident).lexeme;
+        const errorName = this.expectBinder();
         this.expect(TokenKind.Arrow);
         const fallback = this.parseExpr(0);
         return {
@@ -174,16 +184,10 @@ class Parser {
         const lbrace = this.advance();
         const fields: { name: string; value: Expr }[] = [];
         if (!this.at(TokenKind.RBrace)) {
-          const name = this.expect(TokenKind.Ident).lexeme;
-          this.expect(TokenKind.Colon);
-          const value = this.parseExpr(0);
-          fields.push({ name, value });
+          fields.push(this.parseRecordField());
           while (this.eat(TokenKind.Comma)) {
             if (this.at(TokenKind.RBrace)) break;
-            const n = this.expect(TokenKind.Ident).lexeme;
-            this.expect(TokenKind.Colon);
-            const v = this.parseExpr(0);
-            fields.push({ name: n, value: v });
+            fields.push(this.parseRecordField());
           }
         }
         const rbrace = this.expect(TokenKind.RBrace);
@@ -215,18 +219,33 @@ class Parser {
   parseLet(): Expr {
     const letToken = this.expect(TokenKind.Let);
     const rec = !!this.eat(TokenKind.Rec);
-    const nameToken = this.expect(TokenKind.Ident);
+    const name = this.expectBinder();
     this.expect(TokenKind.Eq);
     const value = this.parseExpr(0);
-    this.expect(TokenKind.In);
+    // 'in' is optional: without it, the rest of the enclosing expression is
+    // the body, so 'let x = e1 let y = e2 result' desugars to the same
+    // nested Let nodes as 'let x = e1 in let y = e2 in result'.
+    this.eat(TokenKind.In);
     const body = this.parseExpr(0);
     return {
       kind: "Let",
-      name: nameToken.lexeme,
+      name,
       value,
       body,
       rec,
       span: { start: letToken.span.start, end: body.span.end },
+    };
+  }
+
+  parseRecordField(): { name: string; value: Expr } {
+    const nameToken = this.expect(TokenKind.Ident);
+    if (this.eat(TokenKind.Colon)) {
+      return { name: nameToken.lexeme, value: this.parseExpr(0) };
+    }
+    // Punned field: { total } desugars to { total: total }
+    return {
+      name: nameToken.lexeme,
+      value: { kind: "Ident", name: nameToken.lexeme, span: nameToken.span },
     };
   }
 
@@ -236,15 +255,15 @@ class Parser {
     if (this.eat(TokenKind.LParen)) {
       // fn(a, b) -> ...
       if (!this.at(TokenKind.RParen)) {
-        params.push(this.expect(TokenKind.Ident).lexeme);
+        params.push(this.expectBinder());
         while (this.eat(TokenKind.Comma)) {
-          params.push(this.expect(TokenKind.Ident).lexeme);
+          params.push(this.expectBinder());
         }
       }
       this.expect(TokenKind.RParen);
     } else {
       // fn x -> ... (shorthand single param)
-      params.push(this.expect(TokenKind.Ident).lexeme);
+      params.push(this.expectBinder());
     }
     this.expect(TokenKind.Arrow);
     // Stop fn body before pipe operator so pipes stay at the outer level
