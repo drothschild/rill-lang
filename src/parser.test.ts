@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { parse } from "./parser";
 import { lex } from "./lexer";
+import { prettyPrint } from "./values";
 
 function parseExpr(source: string) {
   return parse(lex(source));
@@ -21,6 +22,15 @@ describe("Parser", () => {
     it("parses strings", () => {
       const ast = parseExpr('"hello"');
       expect(ast).toMatchObject({ kind: "StringLit", value: "hello" });
+    });
+
+    it("round-trips escaped strings through prettyPrint", () => {
+      const source = '"he said \\"hi\\"\\n\\tdone\\\\"';
+      const ast = parseExpr(source) as any;
+      expect(ast).toMatchObject({ kind: "StringLit", value: 'he said "hi"\n\tdone\\' });
+      const printed = prettyPrint({ kind: "String", value: ast.value });
+      expect(printed).toBe(source);
+      expect(parseExpr(printed)).toMatchObject({ kind: "StringLit", value: ast.value });
     });
 
     it("parses booleans", () => {
@@ -189,6 +199,33 @@ describe("Parser", () => {
         arg: { kind: "IntLit", value: 2 },
       });
     });
+
+    it("parses a call on a parenthesized lambda", () => {
+      const ast = parseExpr("(fn x -> x + 1)(5)");
+      expect(ast).toMatchObject({
+        kind: "Call",
+        fn: { kind: "Fn", param: "x" },
+        arg: { kind: "IntLit", value: 5 },
+      });
+    });
+
+    it("parses a call on a field access", () => {
+      const ast = parseExpr("r.f(5)");
+      expect(ast).toMatchObject({
+        kind: "Call",
+        fn: { kind: "FieldAccess", expr: { kind: "Ident", name: "r" }, field: "f" },
+        arg: { kind: "IntLit", value: 5 },
+      });
+    });
+
+    it("parses chained calls on a call result", () => {
+      const ast = parseExpr("g(1)(2)");
+      expect(ast).toMatchObject({
+        kind: "Call",
+        fn: { kind: "Call", fn: { kind: "Ident", name: "g" }, arg: { kind: "IntLit", value: 1 } },
+        arg: { kind: "IntLit", value: 2 },
+      });
+    });
   });
 
   describe("pipes", () => {
@@ -254,6 +291,27 @@ describe("Parser", () => {
         kind: "Pipe",
         right: { kind: "Catch", errorName: "_", fallback: { kind: "IntLit", value: 0 } },
       });
+    });
+    it("keeps a pipe after the catch fallback as a pipeline stage", () => {
+      // x |> catch e -> d |> g  means  (x |> catch e -> d) |> g
+      const ast = parseExpr("x |> catch e -> d |> g");
+      expect(ast).toMatchObject({
+        kind: "Pipe",
+        left: {
+          kind: "Pipe",
+          left: { kind: "Ident", name: "x" },
+          right: { kind: "Catch", errorName: "e", fallback: { kind: "Ident", name: "d" } },
+        },
+        right: { kind: "Ident", name: "g" },
+      });
+    });
+
+    it("rejects a standalone catch expression", () => {
+      expect(() => parseExpr("catch e -> 42")).toThrow(/catch must follow a pipeline \|>/);
+    });
+
+    it("rejects catch outside pipe position inside a let", () => {
+      expect(() => parseExpr("let x = catch e -> 0 in x")).toThrow(/catch must follow a pipeline \|>/);
     });
   });
 
@@ -465,6 +523,99 @@ describe("Parser", () => {
         kind: "Let",
         body: { kind: "FieldAccess", field: "name" },
       });
+    });
+  });
+
+  describe("if/then/else", () => {
+    it("parses if/then/else into an If node", () => {
+      const ast = parseExpr("if true then 1 else 2");
+      expect(ast).toMatchObject({
+        kind: "If",
+        cond: { kind: "BoolLit", value: true },
+        then: { kind: "IntLit", value: 1 },
+        else_: { kind: "IntLit", value: 2 },
+      });
+    });
+
+    it("parses a complex condition expression", () => {
+      const ast = parseExpr('if x > 2 then "big" else "small"');
+      expect(ast).toMatchObject({
+        kind: "If",
+        cond: { kind: "BinOp", op: ">" },
+        then: { kind: "StringLit", value: "big" },
+        else_: { kind: "StringLit", value: "small" },
+      });
+    });
+
+    it("parses chained else-if naturally", () => {
+      const ast = parseExpr("if a then 1 else if b then 2 else 3");
+      expect(ast).toMatchObject({
+        kind: "If",
+        cond: { kind: "Ident", name: "a" },
+        then: { kind: "IntLit", value: 1 },
+        else_: {
+          kind: "If",
+          cond: { kind: "Ident", name: "b" },
+          then: { kind: "IntLit", value: 2 },
+          else_: { kind: "IntLit", value: 3 },
+        },
+      });
+    });
+
+    it("parses if as a let value and in a let body", () => {
+      const ast = parseExpr("let x = if c then 1 else 2 in x");
+      expect(ast).toMatchObject({
+        kind: "Let",
+        value: { kind: "If" },
+        body: { kind: "Ident", name: "x" },
+      });
+    });
+
+    // Branches parse greedily (parseExpr(0)), so a trailing pipe binds
+    // INSIDE the else branch — same as let-in bodies. Use parens to pipe
+    // the whole if: (if c then a else b) |> f.
+    it("binds a trailing pipe inside the else branch", () => {
+      const ast = parseExpr("if c then a else b |> f");
+      expect(ast).toMatchObject({
+        kind: "If",
+        then: { kind: "Ident", name: "a" },
+        else_: {
+          kind: "Pipe",
+          left: { kind: "Ident", name: "b" },
+          right: { kind: "Ident", name: "f" },
+        },
+      });
+    });
+
+    it("pipes the whole if when parenthesized", () => {
+      const ast = parseExpr("(if c then a else b) |> f");
+      expect(ast).toMatchObject({
+        kind: "Pipe",
+        left: { kind: "If" },
+        right: { kind: "Ident", name: "f" },
+      });
+    });
+
+    it("rejects if without else with a positioned error", () => {
+      expect(() => parseExpr("if true then 1")).toThrow(
+        /Expected 'else'.*line 1, col 15/
+      );
+    });
+
+    it("explains that if is an expression when else is missing", () => {
+      expect(() => parseExpr("if true then 1")).toThrow(/'if' is an expression/);
+    });
+
+    it("rejects if without then with a positioned error", () => {
+      expect(() => parseExpr("if true 1 else 2")).toThrow(
+        /Expected 'then' after if condition.*line 1, col 9/
+      );
+    });
+
+    it("gives the then-error for C-style if with braces", () => {
+      expect(() => parseExpr("if x { 1 } else { 2 }")).toThrow(
+        /Expected 'then' after if condition/
+      );
     });
   });
 });

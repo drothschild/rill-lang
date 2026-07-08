@@ -359,18 +359,72 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
   }
 }
 
+function isNumericType(t: Type): boolean {
+  return t.kind === "TCon" && (t.name === "Int" || t.name === "Float");
+}
+
+function containsFnType(t: Type): boolean {
+  switch (t.kind) {
+    case "TFn": return true;
+    case "TVar":
+    case "TCon": return false;
+    case "TList": return containsFnType(t.element);
+    case "TTuple": return t.elements.some(containsFnType);
+    case "TRecord": {
+      for (const v of t.fields.values()) if (containsFnType(v)) return true;
+      return t.rest ? containsFnType(t.rest) : false;
+    }
+    case "TResult": return containsFnType(t.ok);
+    case "TTag": return t.args.some(containsFnType);
+  }
+}
+
 function inferBinOp(op: string, leftT: Type, rightT: Type, subst: Substitution): [Type, Substitution] {
-  // Arithmetic operators: both sides same numeric type, return same type
+  // Arithmetic operators: both sides same numeric type (Int or Float), return same type
   if (["+", "-", "*", "/", "%"].includes(op)) {
     const s1 = unify(leftT, rightT, subst);
-    // Result type is same as operand type
-    return [applySubst(s1, leftT), s1];
+    // Constrain the operand type to Int or Float (Int first, matching unary minus)
+    try {
+      const s2 = unify(applySubst(s1, leftT), { kind: "TCon", name: "Int" }, s1);
+      return [{ kind: "TCon", name: "Int" }, s2];
+    } catch {
+      try {
+        const s2 = unify(applySubst(s1, leftT), { kind: "TCon", name: "Float" }, s1);
+        return [{ kind: "TCon", name: "Float" }, s2];
+      } catch {
+        throw new TypeError(`Operator ${op} requires Int or Float operands, got ${prettyType(applySubst(s1, leftT))}`);
+      }
+    }
   }
 
-  // Comparison operators: both sides same type, return Bool
-  if (["==", "!=", "<", ">", "<=", ">="].includes(op)) {
+  // Equality: any non-function type; Int and Float may mix
+  if (op === "==" || op === "!=") {
+    if (isNumericType(applySubst(subst, leftT)) && isNumericType(applySubst(subst, rightT))) {
+      return [{ kind: "TCon", name: "Bool" }, subst];
+    }
     const s1 = unify(leftT, rightT, subst);
+    if (containsFnType(applySubst(s1, leftT))) {
+      throw new TypeError(`Operator ${op} cannot compare functions`);
+    }
     return [{ kind: "TCon", name: "Bool" }, s1];
+  }
+
+  // Ordering: Int, Float, or String; Int and Float may mix
+  if (["<", ">", "<=", ">="].includes(op)) {
+    if (isNumericType(applySubst(subst, leftT)) && isNumericType(applySubst(subst, rightT))) {
+      return [{ kind: "TCon", name: "Bool" }, subst];
+    }
+    const s1 = unify(leftT, rightT, subst);
+    const resolved = applySubst(s1, leftT);
+    if (resolved.kind === "TVar") {
+      // Unconstrained operands default to Int (matching unary minus)
+      const s2 = unify(resolved, { kind: "TCon", name: "Int" }, s1);
+      return [{ kind: "TCon", name: "Bool" }, s2];
+    }
+    if (isNumericType(resolved) || (resolved.kind === "TCon" && resolved.name === "String")) {
+      return [{ kind: "TCon", name: "Bool" }, s1];
+    }
+    throw new TypeError(`Operator ${op} requires Int, Float, or String operands, got ${prettyType(resolved)}`);
   }
 
   // String concatenation
