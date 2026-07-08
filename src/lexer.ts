@@ -78,6 +78,25 @@ export function lex(source: string): Token[] {
       if (peek() === "\n") {
         throw new Error(`unterminated string at line ${startLine}, col ${startCol}`);
       }
+      if (peek() === "\\") {
+        const escLine = line;
+        const escCol = col;
+        advance(); // backslash
+        if (pos >= source.length || peek() === "\n") {
+          throw new Error(`unterminated string at line ${startLine}, col ${startCol}`);
+        }
+        const esc = advance();
+        switch (esc) {
+          case "\\": value += "\\"; break;
+          case '"': value += '"'; break;
+          case "n": value += "\n"; break;
+          case "t": value += "\t"; break;
+          case "r": value += "\r"; break;
+          default:
+            throw new Error(`Unknown escape sequence '\\${esc}' at line ${escLine}, col ${escCol}`);
+        }
+        continue;
+      }
       value += advance();
     }
     if (pos >= source.length) {
