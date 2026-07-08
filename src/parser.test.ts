@@ -392,4 +392,97 @@ describe("Parser", () => {
       });
     });
   });
+
+  describe("if/then/else", () => {
+    it("parses if/then/else into an If node", () => {
+      const ast = parseExpr("if true then 1 else 2");
+      expect(ast).toMatchObject({
+        kind: "If",
+        cond: { kind: "BoolLit", value: true },
+        then: { kind: "IntLit", value: 1 },
+        else_: { kind: "IntLit", value: 2 },
+      });
+    });
+
+    it("parses a complex condition expression", () => {
+      const ast = parseExpr('if x > 2 then "big" else "small"');
+      expect(ast).toMatchObject({
+        kind: "If",
+        cond: { kind: "BinOp", op: ">" },
+        then: { kind: "StringLit", value: "big" },
+        else_: { kind: "StringLit", value: "small" },
+      });
+    });
+
+    it("parses chained else-if naturally", () => {
+      const ast = parseExpr("if a then 1 else if b then 2 else 3");
+      expect(ast).toMatchObject({
+        kind: "If",
+        cond: { kind: "Ident", name: "a" },
+        then: { kind: "IntLit", value: 1 },
+        else_: {
+          kind: "If",
+          cond: { kind: "Ident", name: "b" },
+          then: { kind: "IntLit", value: 2 },
+          else_: { kind: "IntLit", value: 3 },
+        },
+      });
+    });
+
+    it("parses if as a let value and in a let body", () => {
+      const ast = parseExpr("let x = if c then 1 else 2 in x");
+      expect(ast).toMatchObject({
+        kind: "Let",
+        value: { kind: "If" },
+        body: { kind: "Ident", name: "x" },
+      });
+    });
+
+    // Branches parse greedily (parseExpr(0)), so a trailing pipe binds
+    // INSIDE the else branch — same as let-in bodies. Use parens to pipe
+    // the whole if: (if c then a else b) |> f.
+    it("binds a trailing pipe inside the else branch", () => {
+      const ast = parseExpr("if c then a else b |> f");
+      expect(ast).toMatchObject({
+        kind: "If",
+        then: { kind: "Ident", name: "a" },
+        else_: {
+          kind: "Pipe",
+          left: { kind: "Ident", name: "b" },
+          right: { kind: "Ident", name: "f" },
+        },
+      });
+    });
+
+    it("pipes the whole if when parenthesized", () => {
+      const ast = parseExpr("(if c then a else b) |> f");
+      expect(ast).toMatchObject({
+        kind: "Pipe",
+        left: { kind: "If" },
+        right: { kind: "Ident", name: "f" },
+      });
+    });
+
+    it("rejects if without else with a positioned error", () => {
+      expect(() => parseExpr("if true then 1")).toThrow(
+        /Expected 'else'.*line 1, col 15/
+      );
+    });
+
+    it("explains that if is an expression when else is missing", () => {
+      expect(() => parseExpr("if true then 1")).toThrow(/'if' is an expression/);
+    });
+
+    it("rejects if without then with a positioned error", () => {
+      expect(() => parseExpr("if true 1 else 2")).toThrow(
+        /Expected 'then' after if condition.*line 1, col 9/
+      );
+    });
+
+    it("gives the then-error for C-style if with braces", () => {
+      expect(() => parseExpr("if x { 1 } else { 2 }")).toThrow(
+        /Expected 'then' after if condition/
+      );
+    });
+  });
 });
