@@ -350,4 +350,68 @@ describe("Type Inference", () => {
       expect(() => infer(parse(lex("length([1, 2, 3])")), env)).not.toThrow();
     });
   });
+
+  describe("rules prelude builtins", () => {
+    function typeWithPrelude(source: string): string {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      return prettyType(infer(parse(lex(source)), env));
+    }
+
+    it("count infers Int for a predicate over a list", () => {
+      expect(typeWithPrelude("count(fn(x) -> x > 2, [1, 2, 3])")).toBe("Int");
+    });
+
+    it("count rejects a non-Bool predicate", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex("count(fn(x) -> x + 1, [1, 2])")), env)).toThrow(/unify/i);
+    });
+
+    it("count works piped", () => {
+      expect(typeWithPrelude("[1, 2, 3] |> count(fn(x) -> x > 2)")).toBe("Int");
+    });
+
+    it("contains infers Bool", () => {
+      expect(typeWithPrelude("contains(2, [1, 2, 3])")).toBe("Bool");
+    });
+
+    it("contains rejects an item type mismatching the list element type", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex('contains("a", [1, 2])')), env)).toThrow(/unify/i);
+    });
+
+    it("one_of infers Bool for (value, candidates)", () => {
+      expect(typeWithPrelude('one_of("Offer", ["Interview", "Offer"])')).toBe("Bool");
+    });
+
+    it("lookup infers Result of the tuple value type", () => {
+      expect(typeWithPrelude('lookup("a", [("a", 1), ("b", 2)])')).toBe("Result(Int, String)");
+    });
+
+    it("lookup rejects a key type mismatching the tuple key type", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex('lookup(1, [("a", 1)])')), env)).toThrow(/unify/i);
+    });
+
+    it("require infers Result(Unit, String)", () => {
+      expect(typeWithPrelude('require(true, "msg")')).toBe("Result(Unit, String)");
+    });
+
+    it("require rejects a non-String message", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex("require(true, 42)")), env)).toThrow(/unify/i);
+    });
+
+    it("?-chained require validation typechecks", () => {
+      expect(typeWithPrelude(`
+        let a = require(str_len("x") > 0, "Company name is required")? in
+        let b = require(true, "Role is required")? in
+        Ok("valid")
+      `)).toBe("Result(String, String)");
+    });
+  });
 });
