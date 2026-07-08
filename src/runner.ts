@@ -1,7 +1,7 @@
 import { lex } from "./lexer";
-import { parse } from "./parser";
+import { parseProgram } from "./parser";
 import { evaluate } from "./evaluator";
-import { infer } from "./typechecker";
+import { infer, createPreludeTypeEnv, bindType } from "./typechecker";
 import { prettyPrint } from "./values";
 import { resetTypeVarCounter } from "./types";
 import { createPrelude } from "./prelude";
@@ -15,22 +15,31 @@ interface RunResult {
 export function runSource(source: string): RunResult {
   try {
     const tokens = lex(source);
-    const ast = parse(tokens);
+    const program = parseProgram(tokens);
 
     // Type check — only block on RillError (formatted type errors with source info)
     // Skip TypeError from inference limitations (missing prelude types, no sum types)
+    // Files with a `rule` header are checked against the full prelude + declared params.
     resetTypeVarCounter();
     try {
-      infer(ast, undefined, source);
+      if (program.header) {
+        let typeEnv = createPreludeTypeEnv();
+        for (const param of program.header.params) {
+          typeEnv = bindType(typeEnv, param.name, param.type);
+        }
+        infer(program.body, typeEnv, source);
+      } else {
+        infer(program.body, undefined, source);
+      }
     } catch (e: any) {
       if (e instanceof RillError) {
         return { error: e.message };
       }
     }
 
-    // Evaluate
+    // Evaluate (header params are unbound at the CLI — the embedding host injects them)
     const env = createPrelude();
-    const result = evaluate(ast, env);
+    const result = evaluate(program.body, env);
     return { output: prettyPrint(result) };
   } catch (e: any) {
     return { error: e.message };
