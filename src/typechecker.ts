@@ -505,6 +505,7 @@ export function createPreludeTypeEnv(): TypeEnv {
 
   const tcon = (name: string): Type => ({ kind: "TCon", name });
   const tlist = (element: Type): Type => ({ kind: "TList", element });
+  const ttuple = (...elements: Type[]): Type => ({ kind: "TTuple", elements });
   const tresult = (ok: Type): Type => ({ kind: "TResult", ok });
   // Curried arrow: tfn(A, B, C) === A -> B -> C
   const tfn = (...ts: Type[]): Type =>
@@ -566,6 +567,28 @@ export function createPreludeTypeEnv(): TypeEnv {
     const a = freshTypeVar();
     env.set("print", scheme(tfn(a, Unit)));
   }
+  // count : (a -> Bool) -> List(a) -> Int
+  {
+    const a = freshTypeVar();
+    env.set("count", scheme(tfn(tfn(a, Bool), tlist(a), Int)));
+  }
+  // contains : a -> List(a) -> Bool
+  {
+    const a = freshTypeVar();
+    env.set("contains", scheme(tfn(a, tlist(a), Bool)));
+  }
+  // one_of : a -> List(a) -> Bool (alias of contains)
+  {
+    const a = freshTypeVar();
+    env.set("one_of", scheme(tfn(a, tlist(a), Bool)));
+  }
+  // lookup : k -> List((k, v)) -> Result(v)
+  {
+    const k = freshTypeVar(), v = freshTypeVar();
+    env.set("lookup", scheme(tfn(k, tlist(ttuple(k, v)), tresult(v))));
+  }
+  // require : Bool -> String -> Result(Unit)
+  env.set("require", scheme(tfn(Bool, Str, tresult(Unit))));
 
   return env;
 }

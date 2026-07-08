@@ -98,4 +98,103 @@ describe("Prelude", () => {
       `)).toBe("120");
     });
   });
+
+  describe("count", () => {
+    it("counts elements matching the predicate", () => {
+      expect(runPrint("count(fn(x) -> x > 2, [1, 2, 3, 4])")).toBe("2");
+    });
+
+    it("returns 0 for an empty list", () => {
+      expect(runPrint("count(fn(x) -> x > 2, [])")).toBe("0");
+    });
+
+    it("works with pipes", () => {
+      expect(runPrint("[1, 2, 3, 4] |> count(fn(x) -> x > 2)")).toBe("2");
+    });
+  });
+
+  describe("contains", () => {
+    it("finds an Int in a list", () => {
+      expect(runPrint("contains(2, [1, 2, 3])")).toBe("true");
+    });
+
+    it("returns false when the item is absent", () => {
+      expect(runPrint("contains(5, [1, 2, 3])")).toBe("false");
+    });
+
+    it("finds a String in a list", () => {
+      expect(runPrint('contains("b", ["a", "b"])')).toBe("true");
+    });
+
+    it("returns false on an empty list", () => {
+      expect(runPrint("contains(1, [])")).toBe("false");
+    });
+
+    it("compares tuples structurally", () => {
+      expect(runPrint('contains((1, "a"), [(2, "b"), (1, "a")])')).toBe("true");
+    });
+
+    it("works with pipes", () => {
+      expect(runPrint('["a", "b"] |> contains("b")')).toBe("true");
+    });
+  });
+
+  describe("one_of", () => {
+    it("takes (value, candidates) and matches contains semantics", () => {
+      expect(runPrint('one_of("Offer", ["Interview", "Offer"])')).toBe("true");
+    });
+
+    it("returns false when the value is not a candidate", () => {
+      expect(runPrint('one_of("Applied", ["Interview", "Offer"])')).toBe("false");
+    });
+  });
+
+  describe("lookup", () => {
+    it("returns Ok of the value for a matching key", () => {
+      expect(runPrint('lookup("b", [("a", 1), ("b", 2)])')).toBe("Ok(2)");
+    });
+
+    it("returns the first match", () => {
+      expect(runPrint('lookup("a", [("a", 1), ("a", 2)])')).toBe("Ok(1)");
+    });
+
+    it("returns Err naming the missing String key", () => {
+      expect(runPrint('lookup("c", [("a", 1), ("b", 2)])')).toBe('Err("not found: c")');
+    });
+
+    it("returns Err naming the missing Int key", () => {
+      expect(runPrint('lookup(3, [(1, "x")])')).toBe('Err("not found: 3")');
+    });
+
+    it("returns Err on an empty list", () => {
+      expect(runPrint('lookup("a", [])')).toBe('Err("not found: a")');
+    });
+  });
+
+  describe("require", () => {
+    it("returns Ok(()) when the condition holds", () => {
+      expect(runPrint('require(true, "msg")')).toBe("Ok(())");
+    });
+
+    it("returns Err with the message when the condition fails", () => {
+      expect(runPrint('require(false, "Company name is required")')).toBe('Err("Company name is required")');
+    });
+
+    it("chains with ? for first-error-wins validation", () => {
+      expect(runPrint(`
+        let a = require(true, "first")? in
+        let b = require(false, "second")? in
+        let c = require(false, "third")? in
+        Ok("valid")
+      `)).toBe('Err("second")');
+    });
+
+    it("falls through to the success value when every check passes", () => {
+      expect(runPrint(`
+        let a = require(true, "first")? in
+        let b = require(true, "second")? in
+        Ok("valid")
+      `)).toBe('Ok("valid")');
+    });
+  });
 });
