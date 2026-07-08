@@ -54,11 +54,23 @@ describe("Evaluator", () => {
     it("supports nested let bindings", () => {
       expect(runPrint("let x = 5 in let y = 10 in x + y")).toBe("15");
     });
+
+    it("evaluates sequential lets without in", () => {
+      expect(runPrint("let x = 5 let y = 10 x + y")).toBe("15");
+    });
+
+    it("evaluates a _ let binder, discarding the value", () => {
+      expect(runPrint("let _ = 1 2")).toBe("2");
+    });
   });
 
   describe("functions", () => {
     it("defines and calls a function", () => {
       expect(runPrint("let double = fn(x) -> x * 2 in double(5)")).toBe("10");
+    });
+
+    it("accepts _ as an ignored parameter", () => {
+      expect(runPrint("let f = fn _ -> 7 in f(9)")).toBe("7");
     });
 
     it("supports closures", () => {
@@ -124,6 +136,10 @@ describe("Evaluator", () => {
       expect(runPrint('let x = Err("bad") in x |> catch e -> 0')).toBe("0");
     });
 
+    it("catch with _ binder recovers from Err", () => {
+      expect(runPrint('let x = Err("bad") in x |> catch _ -> 0')).toBe("0");
+    });
+
     it("catch passes through Ok", () => {
       expect(runPrint("let x = Ok(42) in x |> catch e -> 0")).toBe("42");
     });
@@ -147,6 +163,29 @@ describe("Evaluator", () => {
         in "bad" |> parse? |> fn n -> n * 2 |> catch e -> 0
       `)).toBe("0");
     });
+
+    it("pipe after catch fallback applies to the pipeline result", () => {
+      // The |> g stage runs on the value flowing through catch, not inside the fallback
+      expect(runPrint("let g = fn n -> n * 2 in 10 |> catch e -> 1 |> g")).toBe("20");
+    });
+
+    it("pipe after catch fallback applies to the fallback value on the error path", () => {
+      expect(runPrint('let g = fn n -> n * 2 in Err("bad") |> catch e -> 1 |> g')).toBe("2");
+    });
+  });
+
+  describe("calls on non-identifier callees", () => {
+    it("applies a parenthesized lambda", () => {
+      expect(runPrint("(fn x -> x + 1)(5)")).toBe("6");
+    });
+
+    it("calls a function stored in a record field", () => {
+      expect(runPrint("let r = {f: fn x -> x + 1} in r.f(5)")).toBe("6");
+    });
+
+    it("calls the result of a call", () => {
+      expect(runPrint("let g = fn(a) -> fn(b) -> a + b in g(1)(2)")).toBe("3");
+    });
   });
 
   describe("data structures", () => {
@@ -166,9 +205,172 @@ describe("Evaluator", () => {
       expect(runPrint('let user = { name: "Alice" } in user.name')).toBe('"Alice"');
     });
 
+    it("evaluates punned record fields", () => {
+      expect(runPrint("let total = 1 in { total }.total")).toBe("1");
+    });
+
+    it("evaluates sequential lets ending in a punned record", () => {
+      expect(runPrint(`
+        let total = 2
+        let responded = 1
+        { total, responded }.responded
+      `)).toBe("1");
+    });
+
     it("evaluates tagged values", () => {
       expect(runPrint("Ok(42)")).toBe("Ok(42)");
       expect(runPrint("None")).toBe("None");
+    });
+  });
+
+  describe("if/then/else", () => {
+    it("takes the then branch when true", () => {
+      expect(runPrint("if true then 1 else 2")).toBe("1");
+    });
+
+    it("takes the else branch when false", () => {
+      expect(runPrint("if false then 1 else 2")).toBe("2");
+    });
+
+    it("evaluates the condition expression", () => {
+      expect(runPrint('if 2 > 1 then "yes" else "no"')).toBe('"yes"');
+    });
+
+    it("chains else-if", () => {
+      expect(runPrint(`
+        let x = 5 in
+        if x > 10 then "big"
+        else if x > 3 then "mid"
+        else "small"
+      `)).toBe('"mid"');
+    });
+
+    it("only evaluates the taken branch", () => {
+      // The untaken branch would divide by... nothing observable here;
+      // use a match that would fail if evaluated
+      expect(runPrint('if true then 1 else match 0 { 1 -> 2 }')).toBe("1");
+    });
+
+    it("binds a trailing pipe into the else branch", () => {
+      expect(runPrint("let double = fn n -> n * 2 in if false then 1 else 10 |> double")).toBe("20");
+    });
+
+    it("does not apply a trailing pipe to the then branch", () => {
+      expect(runPrint("let double = fn n -> n * 2 in if true then 1 else 10 |> double")).toBe("1");
+    });
+
+    it("pipes the whole if when parenthesized", () => {
+      expect(runPrint("let double = fn n -> n * 2 in (if true then 1 else 10) |> double")).toBe("2");
+    });
+
+    it("throws when the condition is not a Bool", () => {
+      expect(() => run("if 1 then 2 else 3")).toThrow(/If condition must be Bool/);
+    });
+  });
+
+  describe("structural equality", () => {
+    it("compares lists", () => {
+      expect(runPrint("[1, 2] == [1, 2]")).toBe("true");
+      expect(runPrint("[1, 2] == [1, 3]")).toBe("false");
+      expect(runPrint("[1, 2] != [1, 3]")).toBe("true");
+      expect(runPrint("[1] == [1, 2]")).toBe("false");
+    });
+
+    it("compares tuples", () => {
+      expect(runPrint('(1, "a") == (1, "a")')).toBe("true");
+      expect(runPrint('(1, "a") == (1, "b")')).toBe("false");
+    });
+
+    it("compares records", () => {
+      expect(runPrint("{ a: 1, b: 2 } == { a: 1, b: 2 }")).toBe("true");
+      expect(runPrint("{ a: 1 } == { a: 2 }")).toBe("false");
+    });
+
+    it("compares tags", () => {
+      expect(runPrint("Ok(1) == Ok(1)")).toBe("true");
+      expect(runPrint('Ok(1) == Err("x")')).toBe("false");
+      expect(runPrint("Some(1) != Some(2)")).toBe("true");
+      expect(runPrint("None == None")).toBe("true");
+    });
+
+    it("compares unit", () => {
+      expect(runPrint("() == ()")).toBe("true");
+      expect(runPrint("() != ()")).toBe("false");
+    });
+
+    it("compares nested structures", () => {
+      expect(runPrint("[{ a: Ok(1) }] == [{ a: Ok(1) }]")).toBe("true");
+      expect(runPrint("[{ a: Ok(1) }] == [{ a: Ok(2) }]")).toBe("false");
+    });
+
+    it("errors when comparing functions", () => {
+      expect(() => run("let f = fn(x) -> x in f == f")).toThrow(/compare functions/);
+    });
+  });
+
+  describe("string ordering", () => {
+    it("orders strings lexicographically", () => {
+      expect(runPrint('"a" < "b"')).toBe("true");
+      expect(runPrint('"b" > "a"')).toBe("true");
+      expect(runPrint('"a" <= "a"')).toBe("true");
+      expect(runPrint('"b" >= "c"')).toBe("false");
+    });
+  });
+
+  describe("mixed Int/Float numerics", () => {
+    it("compares mixed Int and Float with ==/!=", () => {
+      expect(runPrint("1 == 1.0")).toBe("true");
+      expect(runPrint("1 != 2.5")).toBe("true");
+      expect(runPrint("2.5 == 2")).toBe("false");
+    });
+
+    it("supports modulo on Float", () => {
+      expect(runPrint("5.5 % 2.5")).toBe("0.5");
+    });
+
+    it("supports modulo on mixed Int/Float", () => {
+      expect(runPrint("5.5 % 2")).toBe("1.5");
+    });
+  });
+
+  describe("division by zero", () => {
+    it("throws on Int division by zero", () => {
+      expect(() => run("1 / 0")).toThrow(/Division by zero/);
+    });
+
+    it("throws on Int modulo by zero", () => {
+      expect(() => run("5 % 0")).toThrow(/Modulo by zero/);
+    });
+
+    it("throws on Float division by zero", () => {
+      expect(() => run("1.0 / 0.0")).toThrow(/Division by zero/);
+    });
+
+    it("throws on Float modulo by zero", () => {
+      expect(() => run("5.5 % 0.0")).toThrow(/Modulo by zero/);
+    });
+
+    it("throws on mixed division by zero", () => {
+      expect(() => run("1 / 0.0")).toThrow(/Division by zero/);
+    });
+
+    it("reports the source position", () => {
+      expect(() => run("1 / 0")).toThrow(/line 1/);
+    });
+  });
+
+  describe("short-circuit logic", () => {
+    it("&& does not evaluate the right side when left is false", () => {
+      expect(runPrint("false && (1 / 0 == 0)")).toBe("false");
+    });
+
+    it("|| does not evaluate the right side when left is true", () => {
+      expect(runPrint("true || (1 / 0 == 0)")).toBe("true");
+    });
+
+    it("still evaluates the right side when needed", () => {
+      expect(runPrint("true && false")).toBe("false");
+      expect(runPrint("false || true")).toBe("true");
     });
   });
 });

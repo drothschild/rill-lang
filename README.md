@@ -47,6 +47,36 @@ let x = 5 in x + 1
 let rec fib = fn(n) -> match n <= 1 { true -> n, false -> fib(n-1) + fib(n-2) } in fib(10)
 ```
 
+`in` is optional: without it, the rest of the expression is the body, so sequential
+bindings read top-to-bottom. `_` is accepted as a binder (in `let`, `fn` params, and
+`catch`) for values you don't need to name.
+
+```
+let x = 5
+let y = 10
+x + y   -- => 15
+```
+
+Before/after with a real rule (dashboard.lv), using record field punning for the result:
+
+```
+-- Before
+let total = length(jobs) in
+let warm_count = length(filter(fn(j) -> j.application_type == "warm", jobs)) in
+let cold_count = length(filter(fn(j) -> j.application_type == "cold", jobs)) in
+{
+  total: total,
+  warm_count: warm_count,
+  cold_count: cold_count
+}
+
+-- After
+let total = length(jobs)
+let warm_count = length(filter(fn(j) -> j.application_type == "warm", jobs))
+let cold_count = length(filter(fn(j) -> j.application_type == "cold", jobs))
+{ total, warm_count, cold_count }
+```
+
 ### Functions (auto-curried)
 ```
 let add = fn(a, b) -> a + b
@@ -86,6 +116,33 @@ head([1, 2, 3])? |> fn n -> n + 10 |> catch e -> 0
 -- => 11
 ```
 
+### Validation with require
+`require(cond, msg)` returns `Ok(())` or `Err(msg)`, so chaining `require(...)?`
+gives first-error-wins validation: the first failing check's `Err` becomes the
+program's result, and each check sits on one line next to its message.
+
+```
+let job = { company_name: "Acme", role: "", salary_min: 50, salary_max: 40 } in
+let a = require(str_len(job.company_name) > 0, "Company name is required")? in
+let b = require(str_len(job.role) > 0, "Role is required")? in
+let c = require(job.salary_min == 0 || job.salary_max == 0 || job.salary_min <= job.salary_max,
+                "Minimum salary cannot exceed maximum salary")? in
+Ok("valid")
+-- => Err("Role is required")
+```
+
+This replaces the match-over-a-tuple-of-bools pattern, where each check is
+separated from its message and adding a check means widening every arm:
+
+```
+match (has_company, has_role, salary_valid) {
+  (false, _, _) -> Err("Company name is required"),
+  (_, false, _) -> Err("Role is required"),
+  (_, _, false) -> Err("Minimum salary cannot exceed maximum salary"),
+  _ -> Ok("valid")
+}
+```
+
 ### Pattern Matching
 ```
 let area = fn(shape) -> match shape {
@@ -95,11 +152,45 @@ let area = fn(shape) -> match shape {
 in area(Rect(3, 4))   -- => 12
 ```
 
+### If/Then/Else
+`if` is an expression, so `else` is always required — every `if` produces a value. Both branches must have the same type, and chained `else if` nests naturally:
+```
+let x = 5 in
+if x > 10 then "big"
+else if x > 3 then "mid"
+else "small"
+-- => "mid"
+```
+
+Rules that used to encode conditions as a match on a tuple of booleans read better with `if`. Before:
+```
+-- Injected: job (Record), is_active (Bool)
+{
+  follow_up_due: match (is_active, job.follow_up_date_passed) {
+    (true, true) -> true,
+    _ -> false
+  }
+}
+```
+After:
+```
+{
+  follow_up_due: if is_active then job.follow_up_date_passed else false
+}
+```
+
+Branches parse greedily, so a trailing `|>` binds inside the `else` branch (just like `let ... in` bodies). Parenthesize the `if` to pipe its result:
+```
+if c then a else b |> f     -- pipes b into f, then picks a or (b |> f)
+(if c then a else b) |> f   -- pipes the chosen value into f
+```
+
 ### Data Structures
 ```
 [1, 2, 3]                    -- Lists
 (1, "hello")                 -- Tuples
 { name: "Alice", age: 30 }   -- Records
+{ name, age }                -- Record punning: { name: name, age: age }
 Ok(42)                        -- Tagged values
 ```
 
@@ -167,6 +258,15 @@ Source → Lexer → Parser → Type Checker → Evaluator → Result
 | `print` | `a -> Unit` | Print to stdout |
 | `concat` | `(String, String) -> String` | Concatenate strings |
 | `each` | `(a -> b, List(a)) -> Unit` | Iterate with side effects |
+| `count` | `(a -> Bool, List(a)) -> Int` | Count elements matching a predicate |
+| `contains` | `(a, List(a)) -> Bool` | Membership test (structural equality) |
+| `one_of` | `(a, List(a)) -> Bool` | Alias of `contains`; reads as `one_of(value, candidates)` |
+| `lookup` | `(k, List((k, v))) -> Result(v)` | Assoc-list lookup: `Ok(v)` for the first matching key, else `Err("not found: <key>")` |
+| `require` | `(Bool, String) -> Result(Unit)` | `Ok(())` if the condition holds, else `Err(msg)` |
+
+`contains` and `one_of` are the same function: needle first, list last (so
+`list |> contains(x)` pipes naturally). Use `one_of` when the list is a fixed
+set of candidates: `one_of(job.current_stage, ["Rejected", "Offer"])`.
 
 Note: at runtime `length` also accepts a `String`, but its type signature is `List(a) -> Int`, so `length` on a string is rejected by the type checker — use `str_len` for string length.
 

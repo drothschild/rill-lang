@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { infer, createPreludeTypeEnv } from "./typechecker";
+import { infer, createPreludeTypeEnv, bindType } from "./typechecker";
 import { parse } from "./parser";
 import { lex } from "./lexer";
-import { prettyType, resetTypeVarCounter, Type } from "./types";
+import { prettyType, resetTypeVarCounter, Type, T } from "./types";
 
 function typeOf(source: string): string {
   resetTypeVarCounter();
@@ -122,6 +122,32 @@ describe("Type Inference", () => {
 
     it("infers match with tag patterns", () => {
       expect(typeOf("match Ok(5) { Ok(n) -> n + 1, Err(e) -> 0 }")).toBe("Int");
+    });
+  });
+
+  describe("if/then/else types", () => {
+    it("infers the branch type", () => {
+      expect(typeOf("if true then 1 else 2")).toBe("Int");
+    });
+
+    it("infers String branches", () => {
+      expect(typeOf('if true then "a" else "b"')).toBe("String");
+    });
+
+    it("infers a function over if", () => {
+      expect(typeOf("fn x -> if x then 1 else 2")).toBe("Bool -> Int");
+    });
+
+    it("rejects a non-Bool condition", () => {
+      expect(() => typeOf("if 1 then 2 else 3")).toThrow(/unify/i);
+    });
+
+    it("rejects branches that do not unify", () => {
+      expect(() => typeOf('if true then 1 else "x"')).toThrow(/unify/i);
+    });
+
+    it("infers chained else-if", () => {
+      expect(typeOf('if true then "a" else if false then "b" else "c"')).toBe("String");
     });
   });
 
@@ -349,5 +375,175 @@ describe("Type Inference", () => {
       const env = createPreludeTypeEnv();
       expect(() => infer(parse(lex("length([1, 2, 3])")), env)).not.toThrow();
     });
+  });
+
+  describe("rules prelude builtins", () => {
+    function typeWithPrelude(source: string): string {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      return prettyType(infer(parse(lex(source)), env));
+    }
+
+    it("count infers Int for a predicate over a list", () => {
+      expect(typeWithPrelude("count(fn(x) -> x > 2, [1, 2, 3])")).toBe("Int");
+    });
+
+    it("count rejects a non-Bool predicate", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex("count(fn(x) -> x + 1, [1, 2])")), env)).toThrow(/unify/i);
+    });
+
+    it("count works piped", () => {
+      expect(typeWithPrelude("[1, 2, 3] |> count(fn(x) -> x > 2)")).toBe("Int");
+    });
+
+    it("contains infers Bool", () => {
+      expect(typeWithPrelude("contains(2, [1, 2, 3])")).toBe("Bool");
+    });
+
+    it("contains rejects an item type mismatching the list element type", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex('contains("a", [1, 2])')), env)).toThrow(/unify/i);
+    });
+
+    it("one_of infers Bool for (value, candidates)", () => {
+      expect(typeWithPrelude('one_of("Offer", ["Interview", "Offer"])')).toBe("Bool");
+    });
+
+    it("lookup infers Result of the tuple value type", () => {
+      expect(typeWithPrelude('lookup("a", [("a", 1), ("b", 2)])')).toBe("Result(Int, String)");
+    });
+
+    it("lookup rejects a key type mismatching the tuple key type", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex('lookup(1, [("a", 1)])')), env)).toThrow(/unify/i);
+    });
+
+    it("require infers Result(Unit, String)", () => {
+      expect(typeWithPrelude('require(true, "msg")')).toBe("Result(Unit, String)");
+    });
+
+    it("require rejects a non-String message", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex("require(true, 42)")), env)).toThrow(/unify/i);
+    });
+
+    it("?-chained require validation typechecks", () => {
+      expect(typeWithPrelude(`
+        let a = require(str_len("x") > 0, "Company name is required")? in
+        let b = require(true, "Role is required")? in
+        Ok("valid")
+      `)).toBe("Result(String, String)");
+    });
+  });
+  describe("operator operand constraints", () => {
+    describe("arithmetic requires numeric operands", () => {
+      it("rejects String +", () => {
+        expect(() => typeOf('"a" + "b"')).toThrow();
+      });
+
+      it("rejects Bool *", () => {
+        expect(() => typeOf("true * false")).toThrow();
+      });
+
+      it("accepts Float arithmetic", () => {
+        expect(typeOf("1.5 + 2.5")).toBe("Float");
+        expect(typeOf("5.5 % 2.5")).toBe("Float");
+      });
+
+      it("accepts Int arithmetic", () => {
+        expect(typeOf("10 % 3")).toBe("Int");
+      });
+
+      it("still rejects mixed Int/Float arithmetic", () => {
+        expect(() => typeOf("1 + 2.5")).toThrow();
+      });
+
+      it("defaults polymorphic arithmetic operands to Int", () => {
+        expect(typeOf("fn(a, b) -> a + b")).toBe("Int -> Int -> Int");
+      });
+    });
+
+    describe("ordering requires Int, Float, or String", () => {
+      it("rejects Bool <", () => {
+        expect(() => typeOf("true < false")).toThrow();
+      });
+
+      it("rejects List <", () => {
+        expect(() => typeOf("[1] < [2]")).toThrow();
+      });
+
+      it("accepts String ordering", () => {
+        expect(typeOf('"a" < "b"')).toBe("Bool");
+      });
+
+      it("accepts mixed Int/Float ordering", () => {
+        expect(typeOf("1 < 2.5")).toBe("Bool");
+      });
+    });
+
+    describe("equality accepts any non-function type", () => {
+      it("accepts Unit equality", () => {
+        expect(typeOf("() == ()")).toBe("Bool");
+      });
+
+      it("accepts List equality", () => {
+        expect(typeOf("[1, 2] == [1, 2]")).toBe("Bool");
+      });
+
+      it("accepts Result equality", () => {
+        expect(typeOf("Ok(1) == Ok(1)")).toBe("Bool");
+      });
+
+      it("accepts mixed Int/Float equality", () => {
+        expect(typeOf("1 == 2.5")).toBe("Bool");
+      });
+
+      it("rejects function equality", () => {
+        expect(() => typeOf("let f = fn(x) -> x + 1 in f == f")).toThrow(/function/);
+      });
+    });
+  });
+});
+
+describe("record and tag unification regressions", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("typechecks a match whose arms both produce records (boot-gate stack overflow regression)", () => {
+    expect(typeOf("match true { true -> {ok: true}, _ -> {ok: false} }")).toBe("{ ok: Bool }");
+  });
+
+  it("typechecks a list of record literals", () => {
+    expect(typeOf("[{a: 1}, {a: 2}]")).toBe("List({ a: Int })");
+  });
+
+  it("typechecks a rule-shaped match over an injected open record signature", () => {
+    resetTypeVarCounter();
+    let env = createPreludeTypeEnv();
+    env = bindType(env, "job", T.record({ current_stage: T.String }, true));
+    const src =
+      'let r = match job.current_stage { "Rejected" -> {active: false}, _ -> {active: true} } in r';
+    const type = infer(parse(lex(src)), env);
+    expect(prettyType(type)).toBe("{ active: Bool }");
+  });
+
+  it("typechecks the same custom tag across match branches", () => {
+    expect(typeOf("match true { true -> Some(1), _ -> Some(2) }")).toBe("Some(Int)");
+  });
+
+  it("typechecks identical nullary custom tags across match branches", () => {
+    expect(typeOf("match true { true -> None, _ -> None }")).toBe("None");
+  });
+
+  it("rejects different custom tags across branches with a message naming both tags", () => {
+    expect(() => typeOf("match true { true -> Some(1), _ -> None }")).toThrow(/tag Some.*tag None/);
+  });
+
+  it("reports an infinite type instead of overflowing when a variable is unified with a tag wrapping it", () => {
+    expect(() => typeOf("fn(x) -> match true { true -> x, _ -> Some(x) }")).toThrow(/infinite type/);
   });
 });

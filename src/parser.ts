@@ -36,6 +36,16 @@ class Parser {
     return this.peek().kind === kind;
   }
 
+  // A binder is an identifier or _ (a wildcard the body cannot reference,
+  // since _ is not a valid expression).
+  expectBinder(): string {
+    const token = this.peek();
+    if (token.kind !== TokenKind.Ident && token.kind !== TokenKind.Underscore) {
+      throw new Error(`Expected Ident or _ but got ${token.kind} at line ${token.span.start.line}, col ${token.span.start.col}`);
+    }
+    return this.advance().lexeme;
+  }
+
   eat(kind: TokenKind): Token | null {
     if (this.at(kind)) return this.advance();
     return null;
@@ -53,6 +63,11 @@ class Parser {
       if (this.at(TokenKind.Question) && POSTFIX_BP >= minBp) {
         const qToken = this.advance();
         left = { kind: "Try", expr: left, span: { start: left.span.start, end: qToken.span.end } };
+        continue;
+      }
+      // Postfix call: any expression followed by ( is a function application
+      if (this.at(TokenKind.LParen) && POSTFIX_BP >= minBp) {
+        left = this.parseCallArgs(left);
         continue;
       }
       const token = this.peek();
@@ -90,12 +105,7 @@ class Parser {
       }
       case TokenKind.Ident: {
         this.advance();
-        let expr: Expr = { kind: "Ident", name: token.lexeme, span: token.span };
-        // Handle function call: ident followed by (
-        while (this.at(TokenKind.LParen)) {
-          expr = this.parseCallArgs(expr);
-        }
-        return expr;
+        return { kind: "Ident", name: token.lexeme, span: token.span };
       }
       // Let binding
       case TokenKind.Let: {
@@ -108,6 +118,10 @@ class Parser {
       // Match expression
       case TokenKind.Match: {
         return this.parseMatch();
+      }
+      // If expression
+      case TokenKind.If: {
+        return this.parseIf();
       }
       // List literal
       case TokenKind.LBracket: {
@@ -122,19 +136,9 @@ class Parser {
         const rbracket = this.expect(TokenKind.RBracket);
         return { kind: "List", elements, span: { start: lbracket.span.start, end: rbracket.span.end } };
       }
-      // Catch expression
+      // Catch expression — only valid as the right-hand side of |> (see led)
       case TokenKind.Catch: {
-        const catchToken = this.advance();
-        const errorName = this.expect(TokenKind.Ident).lexeme;
-        this.expect(TokenKind.Arrow);
-        const fallback = this.parseExpr(0);
-        return {
-          kind: "Catch",
-          expr: { kind: "UnitLit", span: catchToken.span } as Expr, // placeholder — pipe fills in actual expr
-          errorName,
-          fallback,
-          span: { start: catchToken.span.start, end: fallback.span.end },
-        };
+        throw new Error(`catch must follow a pipeline |> at line ${token.span.start.line}, col ${token.span.start.col}`);
       }
       // Unary operators
       case TokenKind.Bang: {
@@ -174,16 +178,10 @@ class Parser {
         const lbrace = this.advance();
         const fields: { name: string; value: Expr }[] = [];
         if (!this.at(TokenKind.RBrace)) {
-          const name = this.expect(TokenKind.Ident).lexeme;
-          this.expect(TokenKind.Colon);
-          const value = this.parseExpr(0);
-          fields.push({ name, value });
+          fields.push(this.parseRecordField());
           while (this.eat(TokenKind.Comma)) {
             if (this.at(TokenKind.RBrace)) break;
-            const n = this.expect(TokenKind.Ident).lexeme;
-            this.expect(TokenKind.Colon);
-            const v = this.parseExpr(0);
-            fields.push({ name: n, value: v });
+            fields.push(this.parseRecordField());
           }
         }
         const rbrace = this.expect(TokenKind.RBrace);
@@ -215,18 +213,33 @@ class Parser {
   parseLet(): Expr {
     const letToken = this.expect(TokenKind.Let);
     const rec = !!this.eat(TokenKind.Rec);
-    const nameToken = this.expect(TokenKind.Ident);
+    const name = this.expectBinder();
     this.expect(TokenKind.Eq);
     const value = this.parseExpr(0);
-    this.expect(TokenKind.In);
+    // 'in' is optional: without it, the rest of the enclosing expression is
+    // the body, so 'let x = e1 let y = e2 result' desugars to the same
+    // nested Let nodes as 'let x = e1 in let y = e2 in result'.
+    this.eat(TokenKind.In);
     const body = this.parseExpr(0);
     return {
       kind: "Let",
-      name: nameToken.lexeme,
+      name,
       value,
       body,
       rec,
       span: { start: letToken.span.start, end: body.span.end },
+    };
+  }
+
+  parseRecordField(): { name: string; value: Expr } {
+    const nameToken = this.expect(TokenKind.Ident);
+    if (this.eat(TokenKind.Colon)) {
+      return { name: nameToken.lexeme, value: this.parseExpr(0) };
+    }
+    // Punned field: { total } desugars to { total: total }
+    return {
+      name: nameToken.lexeme,
+      value: { kind: "Ident", name: nameToken.lexeme, span: nameToken.span },
     };
   }
 
@@ -236,15 +249,15 @@ class Parser {
     if (this.eat(TokenKind.LParen)) {
       // fn(a, b) -> ...
       if (!this.at(TokenKind.RParen)) {
-        params.push(this.expect(TokenKind.Ident).lexeme);
+        params.push(this.expectBinder());
         while (this.eat(TokenKind.Comma)) {
-          params.push(this.expect(TokenKind.Ident).lexeme);
+          params.push(this.expectBinder());
         }
       }
       this.expect(TokenKind.RParen);
     } else {
       // fn x -> ... (shorthand single param)
-      params.push(this.expect(TokenKind.Ident).lexeme);
+      params.push(this.expectBinder());
     }
     this.expect(TokenKind.Arrow);
     // Stop fn body before pipe operator so pipes stay at the outer level
@@ -293,6 +306,22 @@ class Parser {
     return result;
   }
 
+  parseCatch(): Expr {
+    const catchToken = this.expect(TokenKind.Catch);
+    const errorName = this.expectBinder();
+    this.expect(TokenKind.Arrow);
+    // Stop the fallback before pipe operator so pipes stay at the outer level,
+    // same convention as fn bodies (|> has left bp 5, so minBp 6 stops before pipes)
+    const fallback = this.parseExpr(6);
+    return {
+      kind: "Catch",
+      expr: { kind: "UnitLit", span: catchToken.span } as Expr, // placeholder — pipe fills in actual expr
+      errorName,
+      fallback,
+      span: { start: catchToken.span.start, end: fallback.span.end },
+    };
+  }
+
   parseMatch(): Expr {
     const matchToken = this.expect(TokenKind.Match);
     const subject = this.parseExpr(0);
@@ -319,6 +348,32 @@ class Parser {
     this.expect(TokenKind.Arrow);
     const body = this.parseExpr(0);
     return { pattern, body };
+  }
+
+  parseIf(): Expr {
+    const ifToken = this.expect(TokenKind.If);
+    const cond = this.parseExpr(0);
+    if (!this.at(TokenKind.Then)) {
+      const t = this.peek();
+      throw new Error(`Expected 'then' after if condition, but got ${t.kind} at line ${t.span.start.line}, col ${t.span.start.col}`);
+    }
+    this.advance();
+    // Branches parse greedily (minBp 0), so a trailing |> binds inside the
+    // else branch — same as let-in bodies. Parenthesize the if to pipe its result.
+    const then = this.parseExpr(0);
+    if (!this.at(TokenKind.Else)) {
+      const t = this.peek();
+      throw new Error(`Expected 'else' after then-branch ('if' is an expression, so else is required), but got ${t.kind} at line ${t.span.start.line}, col ${t.span.start.col}`);
+    }
+    this.advance();
+    const else_ = this.parseExpr(0);
+    return {
+      kind: "If",
+      cond,
+      then,
+      else_,
+      span: { start: ifToken.span.start, end: else_.span.end },
+    };
   }
 
   parsePattern(): import("./ast").Pattern {
@@ -404,7 +459,7 @@ class Parser {
 
     // Pipe operator creates Pipe node, not BinOp
     if (opToken.kind === TokenKind.Pipe) {
-      const right = this.parseExpr(bp[1]);
+      const right = this.at(TokenKind.Catch) ? this.parseCatch() : this.parseExpr(bp[1]);
       return {
         kind: "Pipe",
         left,
