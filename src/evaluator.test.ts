@@ -171,4 +171,110 @@ describe("Evaluator", () => {
       expect(runPrint("None")).toBe("None");
     });
   });
+
+  describe("structural equality", () => {
+    it("compares lists", () => {
+      expect(runPrint("[1, 2] == [1, 2]")).toBe("true");
+      expect(runPrint("[1, 2] == [1, 3]")).toBe("false");
+      expect(runPrint("[1, 2] != [1, 3]")).toBe("true");
+      expect(runPrint("[1] == [1, 2]")).toBe("false");
+    });
+
+    it("compares tuples", () => {
+      expect(runPrint('(1, "a") == (1, "a")')).toBe("true");
+      expect(runPrint('(1, "a") == (1, "b")')).toBe("false");
+    });
+
+    it("compares records", () => {
+      expect(runPrint("{ a: 1, b: 2 } == { a: 1, b: 2 }")).toBe("true");
+      expect(runPrint("{ a: 1 } == { a: 2 }")).toBe("false");
+    });
+
+    it("compares tags", () => {
+      expect(runPrint("Ok(1) == Ok(1)")).toBe("true");
+      expect(runPrint('Ok(1) == Err("x")')).toBe("false");
+      expect(runPrint("Some(1) != Some(2)")).toBe("true");
+      expect(runPrint("None == None")).toBe("true");
+    });
+
+    it("compares unit", () => {
+      expect(runPrint("() == ()")).toBe("true");
+      expect(runPrint("() != ()")).toBe("false");
+    });
+
+    it("compares nested structures", () => {
+      expect(runPrint("[{ a: Ok(1) }] == [{ a: Ok(1) }]")).toBe("true");
+      expect(runPrint("[{ a: Ok(1) }] == [{ a: Ok(2) }]")).toBe("false");
+    });
+
+    it("errors when comparing functions", () => {
+      expect(() => run("let f = fn(x) -> x in f == f")).toThrow(/compare functions/);
+    });
+  });
+
+  describe("string ordering", () => {
+    it("orders strings lexicographically", () => {
+      expect(runPrint('"a" < "b"')).toBe("true");
+      expect(runPrint('"b" > "a"')).toBe("true");
+      expect(runPrint('"a" <= "a"')).toBe("true");
+      expect(runPrint('"b" >= "c"')).toBe("false");
+    });
+  });
+
+  describe("mixed Int/Float numerics", () => {
+    it("compares mixed Int and Float with ==/!=", () => {
+      expect(runPrint("1 == 1.0")).toBe("true");
+      expect(runPrint("1 != 2.5")).toBe("true");
+      expect(runPrint("2.5 == 2")).toBe("false");
+    });
+
+    it("supports modulo on Float", () => {
+      expect(runPrint("5.5 % 2.5")).toBe("0.5");
+    });
+
+    it("supports modulo on mixed Int/Float", () => {
+      expect(runPrint("5.5 % 2")).toBe("1.5");
+    });
+  });
+
+  describe("division by zero", () => {
+    it("throws on Int division by zero", () => {
+      expect(() => run("1 / 0")).toThrow(/Division by zero/);
+    });
+
+    it("throws on Int modulo by zero", () => {
+      expect(() => run("5 % 0")).toThrow(/Modulo by zero/);
+    });
+
+    it("throws on Float division by zero", () => {
+      expect(() => run("1.0 / 0.0")).toThrow(/Division by zero/);
+    });
+
+    it("throws on Float modulo by zero", () => {
+      expect(() => run("5.5 % 0.0")).toThrow(/Modulo by zero/);
+    });
+
+    it("throws on mixed division by zero", () => {
+      expect(() => run("1 / 0.0")).toThrow(/Division by zero/);
+    });
+
+    it("reports the source position", () => {
+      expect(() => run("1 / 0")).toThrow(/line 1/);
+    });
+  });
+
+  describe("short-circuit logic", () => {
+    it("&& does not evaluate the right side when left is false", () => {
+      expect(runPrint("false && (1 / 0 == 0)")).toBe("false");
+    });
+
+    it("|| does not evaluate the right side when left is true", () => {
+      expect(runPrint("true || (1 / 0 == 0)")).toBe("true");
+    });
+
+    it("still evaluates the right side when needed", () => {
+      expect(runPrint("true && false")).toBe("false");
+      expect(runPrint("false || true")).toBe("true");
+    });
+  });
 });
