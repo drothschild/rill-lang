@@ -147,6 +147,29 @@ describe("Evaluator", () => {
         in "bad" |> parse? |> fn n -> n * 2 |> catch e -> 0
       `)).toBe("0");
     });
+
+    it("pipe after catch fallback applies to the pipeline result", () => {
+      // The |> g stage runs on the value flowing through catch, not inside the fallback
+      expect(runPrint("let g = fn n -> n * 2 in 10 |> catch e -> 1 |> g")).toBe("20");
+    });
+
+    it("pipe after catch fallback applies to the fallback value on the error path", () => {
+      expect(runPrint('let g = fn n -> n * 2 in Err("bad") |> catch e -> 1 |> g')).toBe("2");
+    });
+  });
+
+  describe("calls on non-identifier callees", () => {
+    it("applies a parenthesized lambda", () => {
+      expect(runPrint("(fn x -> x + 1)(5)")).toBe("6");
+    });
+
+    it("calls a function stored in a record field", () => {
+      expect(runPrint("let r = {f: fn x -> x + 1} in r.f(5)")).toBe("6");
+    });
+
+    it("calls the result of a call", () => {
+      expect(runPrint("let g = fn(a) -> fn(b) -> a + b in g(1)(2)")).toBe("3");
+    });
   });
 
   describe("data structures", () => {
