@@ -93,6 +93,21 @@ in add5(3)   -- => 8
 -- => 120
 ```
 
+`fn` bodies stop before `|>`, so a lambda written inline in a pipeline is a single stage and the pipe continues at the outer level:
+
+```
+10 |> fn n -> n + 1 |> fn n -> n * 2
+-- => 22, parsed as 10 |> (fn n -> n + 1) |> (fn n -> n * 2)
+```
+
+The flip side: `fn x -> x |> inc` parses as `(fn x -> x) |> inc`, **not** `fn x -> (x |> inc)` — piping the closure itself, which is usually a type error. To use a pipe inside a function body, parenthesize the body:
+
+```
+let inc = fn n -> n + 1 in
+let f = fn x -> (x |> inc) in
+f(10)   -- => 11
+```
+
 ### Error Handling
 ```
 -- ? unwraps Ok, short-circuits on Err
@@ -179,6 +194,40 @@ if c then a else b |> f     -- pipes b into f, then picks a or (b |> f)
 Ok(42)                        -- Tagged values
 ```
 
+### Operators
+
+From highest to lowest precedence (matching `infixBp` in `src/parser.ts`); all binary operators are left-associative:
+
+| Precedence | Operators | Description |
+|------------|-----------|-------------|
+| 1 (highest) | `.` | Record field access |
+| 2 | `?` (postfix) | Unwrap `Ok`, short-circuit on `Err` |
+| 3 | `!` `-` (prefix) | Boolean not, numeric negation |
+| 4 | `*` `/` `%` | Multiply, divide (truncating on `Int`), modulo |
+| 5 | `+` `-` | Add, subtract |
+| 6 | `++` | String concatenation |
+| 7 | `<` `>` `<=` `>=` | Comparison (`Int`/`Float`, or lexicographic on `String`) |
+| 8 | `==` `!=` | Equality |
+| 9 | `&&` | Boolean and |
+| 10 | `\|\|` | Boolean or |
+| 11 (lowest) | `\|>` | Pipeline |
+
+```
+1 + 2 * 3               -- => 7
+7 % 3                   -- => 1
+"foo" ++ "bar" ++ "!"   -- => "foobar!"
+1 < 2 && 2 < 3          -- => true
+!true || 1 == 1         -- => true
+-5 + 3                  -- => -2
+```
+
+Semantics notes:
+
+- `&&` and `||` short-circuit: the right operand is only evaluated when needed.
+- `==`/`!=` are deep structural equality over any non-function values (lists, records, tuples, tags, `()`); `Int` and `Float` compare numerically, so `5 == 5.0` is `true`. Comparing functions is an error.
+- Arithmetic requires numeric operands (`"a" + "b"` is a type error — use `++` to join strings); comparisons accept `Int`, `Float`, or `String`.
+- Integer `/` truncates toward zero; `/` and `%` by zero raise a positioned runtime error.
+
 ## Architecture
 
 Five-phase pipeline:
@@ -201,7 +250,8 @@ Source → Lexer → Parser → Type Checker → Evaluator → Result
 | `map` | `(a -> b, List(a)) -> List(b)` | Map over a list |
 | `filter` | `(a -> Bool, List(a)) -> List(a)` | Filter a list |
 | `fold` | `(b, (b, a) -> b, List(a)) -> b` | Fold/reduce a list |
-| `length` | `List(a) -> Int` | List or string length |
+| `length` | `List(a) -> Int` | List length |
+| `str_len` | `String -> Int` | String length |
 | `head` | `List(a) -> Result(a)` | First element |
 | `tail` | `List(a) -> Result(List(a))` | Rest of list |
 | `to_string` | `a -> String` | Convert to string |
@@ -218,10 +268,12 @@ Source → Lexer → Parser → Type Checker → Evaluator → Result
 `list |> contains(x)` pipes naturally). Use `one_of` when the list is a fixed
 set of candidates: `one_of(job.current_stage, ["Rejected", "Offer"])`.
 
+Note: at runtime `length` also accepts a `String`, but its type signature is `List(a) -> Int`, so `length` on a string is rejected by the type checker — use `str_len` for string length.
+
 ## Known Limitations
 
 - No algebraic data type declarations (tags are structural)
-- Type checker doesn't have prelude type signatures (type checking is best-effort for programs using built-ins)
+- The CLI runner (`runSource`) type-checks against an empty environment and skips type errors without source locations, so it is more permissive than the embedding API (`infer` with `createPreludeTypeEnv`) — a program that runs at the CLI can still fail an embedder's load-time type check
 - No module system
 - No string interpolation
 - Single-file programs only
