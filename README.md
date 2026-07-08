@@ -206,7 +206,7 @@ From highest to lowest precedence (matching `infixBp` in `src/parser.ts`); all b
 | 4 | `*` `/` `%` | Multiply, divide (truncating on `Int`), modulo |
 | 5 | `+` `-` | Add, subtract |
 | 6 | `++` | String concatenation |
-| 7 | `<` `>` `<=` `>=` | Numeric comparison |
+| 7 | `<` `>` `<=` `>=` | Comparison (`Int`/`Float`, or lexicographic on `String`) |
 | 8 | `==` `!=` | Equality |
 | 9 | `&&` | Boolean and |
 | 10 | `\|\|` | Boolean or |
@@ -221,12 +221,12 @@ From highest to lowest precedence (matching `infixBp` in `src/parser.ts`); all b
 -5 + 3                  -- => -2
 ```
 
-Current caveats:
+Semantics notes:
 
-- `&&` and `||` do **not** short-circuit — both operands are always evaluated.
-- `==`/`!=` evaluate only on `Int`, `Float`, `String`, and `Bool`. Comparing lists, records, tuples, tags, or `()` type-checks but throws at runtime.
-- The type checker only requires both operands of an arithmetic or comparison operator to have the same type, so e.g. `"a" + "b"` type-checks but fails at runtime — use `++` to join strings.
-- Integer `/` truncates toward zero; `/` and `%` by zero produce `Infinity`/`NaN` rather than an error.
+- `&&` and `||` short-circuit: the right operand is only evaluated when needed.
+- `==`/`!=` are deep structural equality over any non-function values (lists, records, tuples, tags, `()`); `Int` and `Float` compare numerically, so `5 == 5.0` is `true`. Comparing functions is an error.
+- Arithmetic requires numeric operands (`"a" + "b"` is a type error — use `++` to join strings); comparisons accept `Int`, `Float`, or `String`.
+- Integer `/` truncates toward zero; `/` and `%` by zero raise a positioned runtime error.
 
 ## Architecture
 
@@ -273,7 +273,6 @@ Note: at runtime `length` also accepts a `String`, but its type signature is `Li
 ## Known Limitations
 
 - No algebraic data type declarations (tags are structural)
-- `if` is a reserved keyword but there is no if-expression — use `match`
 - The CLI runner (`runSource`) type-checks against an empty environment and skips type errors without source locations, so it is more permissive than the embedding API (`infer` with `createPreludeTypeEnv`) — a program that runs at the CLI can still fail an embedder's load-time type check
 - No module system
 - No string interpolation
