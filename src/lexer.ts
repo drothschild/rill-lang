@@ -9,6 +9,8 @@ const KEYWORDS: Record<string, TokenKind> = {
   catch: TokenKind.Catch,
   in: TokenKind.In,
   if: TokenKind.If,
+  then: TokenKind.Then,
+  else: TokenKind.Else,
   true: TokenKind.True,
   false: TokenKind.False,
 };
