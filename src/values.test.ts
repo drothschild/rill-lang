@@ -11,6 +11,25 @@ describe("Values", () => {
     expect(prettyPrint({ kind: "String", value: "hello" })).toBe('"hello"');
   });
 
+  it("escapes double quotes inside strings", () => {
+    expect(prettyPrint({ kind: "String", value: 'say "hi"' })).toBe('"say \\"hi\\""');
+  });
+
+  it("escapes backslashes inside strings", () => {
+    expect(prettyPrint({ kind: "String", value: "a\\b" })).toBe('"a\\\\b"');
+  });
+
+  it("escapes newlines, tabs and carriage returns inside strings", () => {
+    expect(prettyPrint({ kind: "String", value: "a\nb\tc\rd" })).toBe('"a\\nb\\tc\\rd"');
+  });
+
+  it("escapes strings nested in records", () => {
+    expect(prettyPrint({
+      kind: "Record",
+      fields: new Map([["note", { kind: "String", value: 'say "hi"' }]]),
+    })).toBe('{ note: "say \\"hi\\"" }');
+  });
+
   it("represents lists", () => {
     expect(prettyPrint({
       kind: "List",

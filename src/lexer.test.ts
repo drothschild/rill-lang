@@ -133,6 +133,40 @@ describe("Lexer", () => {
     });
   });
 
+  describe("string escapes", () => {
+    it("lexes an escaped double quote without terminating the string", () => {
+      const source = '"he said \\"hi\\""';
+      expect(kinds(source)).toEqual([TokenKind.String, TokenKind.EOF]);
+      expect(lexemes(source)).toEqual(['"he said "hi""']);
+    });
+
+    it("decodes \\n, \\t, \\r and \\\\ into the lexeme", () => {
+      const tokens = lex('"a\\nb\\tc\\rd\\\\e"');
+      expect(tokens[0].kind).toBe(TokenKind.String);
+      expect(tokens[0].lexeme).toBe('"a\nb\tc\rd\\e"');
+    });
+
+    it("rejects unknown escape sequences with a position", () => {
+      expect(() => lex('"a\\qb"')).toThrow();
+      try {
+        lex('"a\\qb"');
+      } catch (e: any) {
+        expect(e.message).toContain("escape");
+        expect(e.message).toContain("\\q");
+        expect(e.message).toContain("line 1");
+        expect(e.message).toContain("col 3");
+      }
+    });
+
+    it("treats a trailing backslash as an unterminated string", () => {
+      expect(() => lex('"abc\\')).toThrow("unterminated string");
+    });
+
+    it("still rejects raw newlines inside strings", () => {
+      expect(() => lex('"a\nb"')).toThrow("unterminated string");
+    });
+  });
+
   describe("lexer errors", () => {
     it("reports unexpected characters with position", () => {
       expect(() => lex("let x = @")).toThrow();
