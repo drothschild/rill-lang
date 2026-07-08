@@ -106,6 +106,41 @@ describe("Parser", () => {
       const ast = parseExpr("let rec f = fn(n) -> n in f(5)");
       expect(ast).toMatchObject({ kind: "Let", name: "f", rec: true });
     });
+
+    it("parses let without in, body following directly", () => {
+      const ast = parseExpr("let x = 5 x + 1");
+      expect(ast).toMatchObject({
+        kind: "Let", name: "x", rec: false,
+        value: { kind: "IntLit", value: 5 },
+        body: { kind: "BinOp", op: "+" },
+      });
+    });
+
+    it("parses sequential lets without in as nested Lets", () => {
+      const ast = parseExpr(`
+        let x = 5
+        let y = 10
+        x + y
+      `);
+      expect(ast).toMatchObject({
+        kind: "Let", name: "x",
+        value: { kind: "IntLit", value: 5 },
+        body: {
+          kind: "Let", name: "y",
+          value: { kind: "IntLit", value: 10 },
+          body: { kind: "BinOp", op: "+" },
+        },
+      });
+    });
+
+    it("parses _ as a let binder", () => {
+      const ast = parseExpr("let _ = 5 10");
+      expect(ast).toMatchObject({
+        kind: "Let", name: "_",
+        value: { kind: "IntLit", value: 5 },
+        body: { kind: "IntLit", value: 10 },
+      });
+    });
   });
 
   describe("functions", () => {
@@ -133,6 +168,16 @@ describe("Parser", () => {
         fn: { kind: "Ident", name: "f" },
         arg: { kind: "IntLit", value: 5 },
       });
+    });
+
+    it("accepts _ as a parameter", () => {
+      const ast = parseExpr("fn(_) -> 1");
+      expect(ast).toMatchObject({ kind: "Fn", param: "_", body: { kind: "IntLit", value: 1 } });
+    });
+
+    it("accepts _ as a shorthand parameter", () => {
+      const ast = parseExpr("fn _ -> 1");
+      expect(ast).toMatchObject({ kind: "Fn", param: "_" });
     });
 
     it("parses multi-arg calls as curried application", () => {
@@ -200,6 +245,14 @@ describe("Parser", () => {
         kind: "Pipe",
         left: { kind: "Pipe" },
         right: { kind: "Catch", errorName: "e", fallback: { kind: "IntLit", value: 0 } },
+      });
+    });
+
+    it("accepts _ as the error binder", () => {
+      const ast = parseExpr("x |> catch _ -> 0");
+      expect(ast).toMatchObject({
+        kind: "Pipe",
+        right: { kind: "Catch", errorName: "_", fallback: { kind: "IntLit", value: 0 } },
       });
     });
   });
@@ -311,6 +364,28 @@ describe("Parser", () => {
         fields: [
           { name: "name", value: { kind: "StringLit", value: "Alice" } },
           { name: "age", value: { kind: "IntLit", value: 30 } },
+        ],
+      });
+    });
+
+    it("parses record field punning", () => {
+      const ast = parseExpr("{ total, responded }");
+      expect(ast).toMatchObject({
+        kind: "Record",
+        fields: [
+          { name: "total", value: { kind: "Ident", name: "total" } },
+          { name: "responded", value: { kind: "Ident", name: "responded" } },
+        ],
+      });
+    });
+
+    it("parses mixed punned and explicit record fields", () => {
+      const ast = parseExpr("{ total, count: 2 }");
+      expect(ast).toMatchObject({
+        kind: "Record",
+        fields: [
+          { name: "total", value: { kind: "Ident", name: "total" } },
+          { name: "count", value: { kind: "IntLit", value: 2 } },
         ],
       });
     });

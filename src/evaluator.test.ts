@@ -54,11 +54,23 @@ describe("Evaluator", () => {
     it("supports nested let bindings", () => {
       expect(runPrint("let x = 5 in let y = 10 in x + y")).toBe("15");
     });
+
+    it("evaluates sequential lets without in", () => {
+      expect(runPrint("let x = 5 let y = 10 x + y")).toBe("15");
+    });
+
+    it("evaluates a _ let binder, discarding the value", () => {
+      expect(runPrint("let _ = 1 2")).toBe("2");
+    });
   });
 
   describe("functions", () => {
     it("defines and calls a function", () => {
       expect(runPrint("let double = fn(x) -> x * 2 in double(5)")).toBe("10");
+    });
+
+    it("accepts _ as an ignored parameter", () => {
+      expect(runPrint("let f = fn _ -> 7 in f(9)")).toBe("7");
     });
 
     it("supports closures", () => {
@@ -124,6 +136,10 @@ describe("Evaluator", () => {
       expect(runPrint('let x = Err("bad") in x |> catch e -> 0')).toBe("0");
     });
 
+    it("catch with _ binder recovers from Err", () => {
+      expect(runPrint('let x = Err("bad") in x |> catch _ -> 0')).toBe("0");
+    });
+
     it("catch passes through Ok", () => {
       expect(runPrint("let x = Ok(42) in x |> catch e -> 0")).toBe("42");
     });
@@ -164,6 +180,18 @@ describe("Evaluator", () => {
 
     it("evaluates field access", () => {
       expect(runPrint('let user = { name: "Alice" } in user.name')).toBe('"Alice"');
+    });
+
+    it("evaluates punned record fields", () => {
+      expect(runPrint("let total = 1 in { total }.total")).toBe("1");
+    });
+
+    it("evaluates sequential lets ending in a punned record", () => {
+      expect(runPrint(`
+        let total = 2
+        let responded = 1
+        { total, responded }.responded
+      `)).toBe("1");
     });
 
     it("evaluates tagged values", () => {
