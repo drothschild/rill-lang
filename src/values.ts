@@ -13,11 +13,20 @@ export type Value =
   | { kind: "Closure"; param: string; body: Expr; env: Map<string, Value> }
   | { kind: "BuiltinFn"; name: string; arity: number; applied: Value[]; fn: (args: Value[]) => Value };
 
+function escapeString(s: string): string {
+  return s
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\t/g, "\\t")
+    .replace(/\r/g, "\\r");
+}
+
 export function prettyPrint(v: Value): string {
   switch (v.kind) {
     case "Int": return String(v.value);
     case "Float": return String(v.value);
-    case "String": return `"${v.value}"`;
+    case "String": return `"${escapeString(v.value)}"`;
     case "Bool": return String(v.value);
     case "Unit": return "()";
     case "List": return `[${v.elements.map(prettyPrint).join(", ")}]`;

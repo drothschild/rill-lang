@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { parse } from "./parser";
 import { lex } from "./lexer";
+import { prettyPrint } from "./values";
 
 function parseExpr(source: string) {
   return parse(lex(source));
@@ -21,6 +22,15 @@ describe("Parser", () => {
     it("parses strings", () => {
       const ast = parseExpr('"hello"');
       expect(ast).toMatchObject({ kind: "StringLit", value: "hello" });
+    });
+
+    it("round-trips escaped strings through prettyPrint", () => {
+      const source = '"he said \\"hi\\"\\n\\tdone\\\\"';
+      const ast = parseExpr(source) as any;
+      expect(ast).toMatchObject({ kind: "StringLit", value: 'he said "hi"\n\tdone\\' });
+      const printed = prettyPrint({ kind: "String", value: ast.value });
+      expect(printed).toBe(source);
+      expect(parseExpr(printed)).toMatchObject({ kind: "StringLit", value: ast.value });
     });
 
     it("parses booleans", () => {
