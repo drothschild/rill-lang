@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { infer, createPreludeTypeEnv } from "./typechecker";
+import { infer, createPreludeTypeEnv, bindType } from "./typechecker";
 import { parse } from "./parser";
 import { lex } from "./lexer";
-import { prettyType, resetTypeVarCounter, Type } from "./types";
+import { prettyType, resetTypeVarCounter, Type, T } from "./types";
 
 function typeOf(source: string): string {
   resetTypeVarCounter();
@@ -418,5 +418,43 @@ describe("Type Inference", () => {
         expect(() => typeOf("let f = fn(x) -> x + 1 in f == f")).toThrow(/function/);
       });
     });
+  });
+});
+
+describe("record and tag unification regressions", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("typechecks a match whose arms both produce records (boot-gate stack overflow regression)", () => {
+    expect(typeOf("match true { true -> {ok: true}, _ -> {ok: false} }")).toBe("{ ok: Bool }");
+  });
+
+  it("typechecks a list of record literals", () => {
+    expect(typeOf("[{a: 1}, {a: 2}]")).toBe("List({ a: Int })");
+  });
+
+  it("typechecks a rule-shaped match over an injected open record signature", () => {
+    resetTypeVarCounter();
+    let env = createPreludeTypeEnv();
+    env = bindType(env, "job", T.record({ current_stage: T.String }, true));
+    const src =
+      'let r = match job.current_stage { "Rejected" -> {active: false}, _ -> {active: true} } in r';
+    const type = infer(parse(lex(src)), env);
+    expect(prettyType(type)).toBe("{ active: Bool }");
+  });
+
+  it("typechecks the same custom tag across match branches", () => {
+    expect(typeOf("match true { true -> Some(1), _ -> Some(2) }")).toBe("Some(Int)");
+  });
+
+  it("typechecks identical nullary custom tags across match branches", () => {
+    expect(typeOf("match true { true -> None, _ -> None }")).toBe("None");
+  });
+
+  it("rejects different custom tags across branches with a message naming both tags", () => {
+    expect(() => typeOf("match true { true -> Some(1), _ -> None }")).toThrow(/tag Some.*tag None/);
+  });
+
+  it("reports an infinite type instead of overflowing when a variable is unified with a tag wrapping it", () => {
+    expect(() => typeOf("fn(x) -> match true { true -> x, _ -> Some(x) }")).toThrow(/infinite type/);
   });
 });
