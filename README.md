@@ -47,6 +47,36 @@ let x = 5 in x + 1
 let rec fib = fn(n) -> match n <= 1 { true -> n, false -> fib(n-1) + fib(n-2) } in fib(10)
 ```
 
+`in` is optional: without it, the rest of the expression is the body, so sequential
+bindings read top-to-bottom. `_` is accepted as a binder (in `let`, `fn` params, and
+`catch`) for values you don't need to name.
+
+```
+let x = 5
+let y = 10
+x + y   -- => 15
+```
+
+Before/after with a real rule (dashboard.lv), using record field punning for the result:
+
+```
+-- Before
+let total = length(jobs) in
+let warm_count = length(filter(fn(j) -> j.application_type == "warm", jobs)) in
+let cold_count = length(filter(fn(j) -> j.application_type == "cold", jobs)) in
+{
+  total: total,
+  warm_count: warm_count,
+  cold_count: cold_count
+}
+
+-- After
+let total = length(jobs)
+let warm_count = length(filter(fn(j) -> j.application_type == "warm", jobs))
+let cold_count = length(filter(fn(j) -> j.application_type == "cold", jobs))
+{ total, warm_count, cold_count }
+```
+
 ### Functions (auto-curried)
 ```
 let add = fn(a, b) -> a + b
@@ -118,6 +148,7 @@ if c then a else b |> f     -- pipes b into f, then picks a or (b |> f)
 [1, 2, 3]                    -- Lists
 (1, "hello")                 -- Tuples
 { name: "Alice", age: 30 }   -- Records
+{ name, age }                -- Record punning: { name: name, age: age }
 Ok(42)                        -- Tagged values
 ```
 
