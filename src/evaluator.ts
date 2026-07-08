@@ -1,5 +1,6 @@
 import { Expr } from "./ast";
 import { Value } from "./values";
+import { Span, formatSpan } from "./span";
 
 class EarlyReturn {
   constructor(public value: Value) {}
@@ -34,9 +35,19 @@ function evalExpr(expr: Expr, env: Map<string, Value>): Value {
     }
 
     case "BinOp": {
+      // && and || short-circuit: only evaluate the right side when needed
+      if (expr.op === "&&" || expr.op === "||") {
+        const left = evalExpr(expr.left, env);
+        if (left.kind !== "Bool") throw new Error(`Cannot apply operator ${expr.op} to ${left.kind}`);
+        if (expr.op === "&&" && !left.value) return { kind: "Bool", value: false };
+        if (expr.op === "||" && left.value) return { kind: "Bool", value: true };
+        const right = evalExpr(expr.right, env);
+        if (right.kind !== "Bool") throw new Error(`Cannot apply operator ${expr.op} to ${right.kind}`);
+        return right;
+      }
       const left = evalExpr(expr.left, env);
       const right = evalExpr(expr.right, env);
-      return evalBinOp(expr.op, left, right);
+      return evalBinOp(expr.op, left, right, expr.span);
     }
 
     case "UnaryOp": {
@@ -243,17 +254,25 @@ function matchPattern(pattern: import("./ast").Pattern, value: Value): Map<strin
   }
 }
 
-function evalBinOp(op: string, left: Value, right: Value): Value {
+function evalBinOp(op: string, left: Value, right: Value, span: Span): Value {
+  // Equality: deep structural comparison over all value kinds
+  if (op === "==" || op === "!=") {
+    const equal = valueEquals(left, right);
+    return { kind: "Bool", value: op === "==" ? equal : !equal };
+  }
+
   // Arithmetic (Int)
   if (left.kind === "Int" && right.kind === "Int") {
     switch (op) {
       case "+": return { kind: "Int", value: left.value + right.value };
       case "-": return { kind: "Int", value: left.value - right.value };
       case "*": return { kind: "Int", value: left.value * right.value };
-      case "/": return { kind: "Int", value: Math.trunc(left.value / right.value) };
-      case "%": return { kind: "Int", value: left.value % right.value };
-      case "==": return { kind: "Bool", value: left.value === right.value };
-      case "!=": return { kind: "Bool", value: left.value !== right.value };
+      case "/":
+        if (right.value === 0) throw new Error(`Division by zero at ${formatSpan(span)}`);
+        return { kind: "Int", value: Math.trunc(left.value / right.value) };
+      case "%":
+        if (right.value === 0) throw new Error(`Modulo by zero at ${formatSpan(span)}`);
+        return { kind: "Int", value: left.value % right.value };
       case "<": return { kind: "Bool", value: left.value < right.value };
       case ">": return { kind: "Bool", value: left.value > right.value };
       case "<=": return { kind: "Bool", value: left.value <= right.value };
@@ -267,9 +286,12 @@ function evalBinOp(op: string, left: Value, right: Value): Value {
       case "+": return { kind: "Float", value: left.value + right.value };
       case "-": return { kind: "Float", value: left.value - right.value };
       case "*": return { kind: "Float", value: left.value * right.value };
-      case "/": return { kind: "Float", value: left.value / right.value };
-      case "==": return { kind: "Bool", value: left.value === right.value };
-      case "!=": return { kind: "Bool", value: left.value !== right.value };
+      case "/":
+        if (right.value === 0) throw new Error(`Division by zero at ${formatSpan(span)}`);
+        return { kind: "Float", value: left.value / right.value };
+      case "%":
+        if (right.value === 0) throw new Error(`Modulo by zero at ${formatSpan(span)}`);
+        return { kind: "Float", value: left.value % right.value };
       case "<": return { kind: "Bool", value: left.value < right.value };
       case ">": return { kind: "Bool", value: left.value > right.value };
     }
@@ -283,7 +305,12 @@ function evalBinOp(op: string, left: Value, right: Value): Value {
       case "+": return { kind: "Float", value: l + r };
       case "-": return { kind: "Float", value: l - r };
       case "*": return { kind: "Float", value: l * r };
-      case "/": return { kind: "Float", value: l / r };
+      case "/":
+        if (r === 0) throw new Error(`Division by zero at ${formatSpan(span)}`);
+        return { kind: "Float", value: l / r };
+      case "%":
+        if (r === 0) throw new Error(`Modulo by zero at ${formatSpan(span)}`);
+        return { kind: "Float", value: l % r };
       case "<": return { kind: "Bool", value: l < r };
       case ">": return { kind: "Bool", value: l > r };
       case "<=": return { kind: "Bool", value: l <= r };
@@ -296,25 +323,55 @@ function evalBinOp(op: string, left: Value, right: Value): Value {
     return { kind: "String", value: left.value + right.value };
   }
 
-  // String equality
+  // String ordering (lexicographic)
   if (left.kind === "String" && right.kind === "String") {
     switch (op) {
-      case "==": return { kind: "Bool", value: left.value === right.value };
-      case "!=": return { kind: "Bool", value: left.value !== right.value };
-    }
-  }
-
-  // Boolean logic
-  if (left.kind === "Bool" && right.kind === "Bool") {
-    switch (op) {
-      case "&&": return { kind: "Bool", value: left.value && right.value };
-      case "||": return { kind: "Bool", value: left.value || right.value };
-      case "==": return { kind: "Bool", value: left.value === right.value };
-      case "!=": return { kind: "Bool", value: left.value !== right.value };
+      case "<": return { kind: "Bool", value: left.value < right.value };
+      case ">": return { kind: "Bool", value: left.value > right.value };
+      case "<=": return { kind: "Bool", value: left.value <= right.value };
+      case ">=": return { kind: "Bool", value: left.value >= right.value };
     }
   }
 
   throw new Error(`Cannot apply operator ${op} to ${left.kind} and ${right.kind}`);
+}
+
+function valueEquals(a: Value, b: Value): boolean {
+  // Int and Float compare numerically, so host-injected numbers of either
+  // kind compare consistently
+  if ((a.kind === "Int" || a.kind === "Float") && (b.kind === "Int" || b.kind === "Float")) {
+    return a.value === b.value;
+  }
+  if (a.kind === "Closure" || a.kind === "BuiltinFn" || b.kind === "Closure" || b.kind === "BuiltinFn") {
+    throw new Error("Cannot compare functions for equality");
+  }
+  if (a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case "String": return a.value === (b as typeof a).value;
+    case "Bool": return a.value === (b as typeof a).value;
+    case "Unit": return true;
+    case "List":
+    case "Tuple": {
+      const bs = b as typeof a;
+      if (a.elements.length !== bs.elements.length) return false;
+      return a.elements.every((el, i) => valueEquals(el, bs.elements[i]));
+    }
+    case "Record": {
+      const bs = b as typeof a;
+      if (a.fields.size !== bs.fields.size) return false;
+      for (const [k, v] of a.fields) {
+        const other = bs.fields.get(k);
+        if (other === undefined || !valueEquals(v, other)) return false;
+      }
+      return true;
+    }
+    case "Tag": {
+      const bs = b as typeof a;
+      if (a.tag !== bs.tag || a.args.length !== bs.args.length) return false;
+      return a.args.every((arg, i) => valueEquals(arg, bs.args[i]));
+    }
+  }
+  return false;
 }
 
 function evalUnaryOp(op: string, operand: Value): Value {
