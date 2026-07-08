@@ -1,12 +1,39 @@
 import { Token, TokenKind } from "./token";
 import { Expr } from "./ast";
 import { Span } from "./span";
+import { Type, freshTypeVar } from "./types";
 
 export function parse(tokens: Token[]): Expr {
   const parser = new Parser(tokens);
   const expr = parser.parseExpr(0);
   parser.expect(TokenKind.EOF);
   return expr;
+}
+
+export interface RuleParam {
+  name: string;
+  type: Type;
+}
+
+export interface RuleHeader {
+  name: string;
+  params: RuleParam[];
+  returnType: Type | null;
+}
+
+export interface Program {
+  header: RuleHeader | null;
+  body: Expr;
+}
+
+// Parse a whole rule file: an optional `rule name(params) -> Type` header
+// followed by the body expression. Headerless sources parse exactly as parse().
+export function parseProgram(tokens: Token[]): Program {
+  const parser = new Parser(tokens);
+  const header = parser.at(TokenKind.Rule) ? parser.parseRuleHeader() : null;
+  const body = parser.parseExpr(0);
+  parser.expect(TokenKind.EOF);
+  return { header, body };
 }
 
 class Parser {
@@ -304,6 +331,95 @@ class Parser {
       };
     }
     return result;
+  }
+
+  parseRuleHeader(): RuleHeader {
+    this.expect(TokenKind.Rule);
+    const name = this.expect(TokenKind.Ident).lexeme;
+    this.expect(TokenKind.LParen);
+    const params: RuleParam[] = [];
+    if (!this.at(TokenKind.RParen)) {
+      params.push(this.parseRuleParam());
+      while (this.eat(TokenKind.Comma)) {
+        if (this.at(TokenKind.RParen)) break; // trailing comma
+        params.push(this.parseRuleParam());
+      }
+    }
+    this.expect(TokenKind.RParen);
+    let returnType: Type | null = null;
+    if (this.eat(TokenKind.Arrow)) {
+      returnType = this.parseTypeAnn();
+    }
+    return { name, params, returnType };
+  }
+
+  parseRuleParam(): RuleParam {
+    const name = this.expect(TokenKind.Ident).lexeme;
+    this.expect(TokenKind.Colon);
+    return { name, type: this.parseTypeAnn() };
+  }
+
+  parseTypeAnn(): Type {
+    const token = this.peek();
+    switch (token.kind) {
+      case TokenKind.UpperIdent: {
+        this.advance();
+        switch (token.lexeme) {
+          case "Int": case "Float": case "String": case "Bool": case "Unit":
+            return { kind: "TCon", name: token.lexeme };
+          case "List": {
+            this.expect(TokenKind.LParen);
+            const element = this.parseTypeAnn();
+            this.expect(TokenKind.RParen);
+            return { kind: "TList", element };
+          }
+          case "Result": {
+            this.expect(TokenKind.LParen);
+            const ok = this.parseTypeAnn();
+            this.expect(TokenKind.RParen);
+            return { kind: "TResult", ok };
+          }
+          default:
+            throw new Error(`Unknown type name '${token.lexeme}' at line ${token.span.start.line}, col ${token.span.start.col} (expected Int, Float, String, Bool, Unit, List(..), Result(..), a record type, or a tuple type)`);
+        }
+      }
+      // Record type: { field: Type, .. } — trailing `..` marks an open row
+      case TokenKind.LBrace: {
+        this.advance();
+        const fields = new Map<string, Type>();
+        let rest: Type | null = null;
+        while (!this.at(TokenKind.RBrace)) {
+          if (this.eat(TokenKind.DotDot)) {
+            rest = freshTypeVar();
+            this.eat(TokenKind.Comma);
+            break;
+          }
+          const fieldName = this.expect(TokenKind.Ident).lexeme;
+          this.expect(TokenKind.Colon);
+          fields.set(fieldName, this.parseTypeAnn());
+          if (!this.eat(TokenKind.Comma)) break;
+        }
+        this.expect(TokenKind.RBrace);
+        return { kind: "TRecord", fields, rest };
+      }
+      // Tuple type: (A, B, ...) — single parens are grouping
+      case TokenKind.LParen: {
+        this.advance();
+        const first = this.parseTypeAnn();
+        if (this.eat(TokenKind.Comma)) {
+          const elements: Type[] = [first, this.parseTypeAnn()];
+          while (this.eat(TokenKind.Comma)) {
+            elements.push(this.parseTypeAnn());
+          }
+          this.expect(TokenKind.RParen);
+          return { kind: "TTuple", elements };
+        }
+        this.expect(TokenKind.RParen);
+        return first;
+      }
+      default:
+        throw new Error(`Expected a type annotation but got ${token.kind} ("${token.lexeme}") at line ${token.span.start.line}, col ${token.span.start.col}`);
+    }
   }
 
   parseCatch(): Expr {

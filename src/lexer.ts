@@ -11,6 +11,7 @@ const KEYWORDS: Record<string, TokenKind> = {
   if: TokenKind.If,
   then: TokenKind.Then,
   else: TokenKind.Else,
+  rule: TokenKind.Rule,
   true: TokenKind.True,
   false: TokenKind.False,
 };
@@ -178,6 +179,7 @@ export function lex(source: string): Token[] {
     if (twoChar === "|>") { advance(); advance(); emit(TokenKind.Pipe, "|>", startLine, startCol, startOffset); continue; }
     if (twoChar === "||") { advance(); advance(); emit(TokenKind.PipePipe, "||", startLine, startCol, startOffset); continue; }
     if (twoChar === "++") { advance(); advance(); emit(TokenKind.PlusPlus, "++", startLine, startCol, startOffset); continue; }
+    if (twoChar === "..") { advance(); advance(); emit(TokenKind.DotDot, "..", startLine, startCol, startOffset); continue; }
     if (twoChar === "->") { advance(); advance(); emit(TokenKind.Arrow, "->", startLine, startCol, startOffset); continue; }
     if (twoChar === "==") { advance(); advance(); emit(TokenKind.EqEq, "==", startLine, startCol, startOffset); continue; }
     if (twoChar === "!=") { advance(); advance(); emit(TokenKind.BangEq, "!=", startLine, startCol, startOffset); continue; }
