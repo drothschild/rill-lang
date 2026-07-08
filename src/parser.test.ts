@@ -154,6 +154,33 @@ describe("Parser", () => {
         arg: { kind: "IntLit", value: 2 },
       });
     });
+
+    it("parses a call on a parenthesized lambda", () => {
+      const ast = parseExpr("(fn x -> x + 1)(5)");
+      expect(ast).toMatchObject({
+        kind: "Call",
+        fn: { kind: "Fn", param: "x" },
+        arg: { kind: "IntLit", value: 5 },
+      });
+    });
+
+    it("parses a call on a field access", () => {
+      const ast = parseExpr("r.f(5)");
+      expect(ast).toMatchObject({
+        kind: "Call",
+        fn: { kind: "FieldAccess", expr: { kind: "Ident", name: "r" }, field: "f" },
+        arg: { kind: "IntLit", value: 5 },
+      });
+    });
+
+    it("parses chained calls on a call result", () => {
+      const ast = parseExpr("g(1)(2)");
+      expect(ast).toMatchObject({
+        kind: "Call",
+        fn: { kind: "Call", fn: { kind: "Ident", name: "g" }, arg: { kind: "IntLit", value: 1 } },
+        arg: { kind: "IntLit", value: 2 },
+      });
+    });
   });
 
   describe("pipes", () => {
@@ -211,6 +238,28 @@ describe("Parser", () => {
         left: { kind: "Pipe" },
         right: { kind: "Catch", errorName: "e", fallback: { kind: "IntLit", value: 0 } },
       });
+    });
+
+    it("keeps a pipe after the catch fallback as a pipeline stage", () => {
+      // x |> catch e -> d |> g  means  (x |> catch e -> d) |> g
+      const ast = parseExpr("x |> catch e -> d |> g");
+      expect(ast).toMatchObject({
+        kind: "Pipe",
+        left: {
+          kind: "Pipe",
+          left: { kind: "Ident", name: "x" },
+          right: { kind: "Catch", errorName: "e", fallback: { kind: "Ident", name: "d" } },
+        },
+        right: { kind: "Ident", name: "g" },
+      });
+    });
+
+    it("rejects a standalone catch expression", () => {
+      expect(() => parseExpr("catch e -> 42")).toThrow(/catch must follow a pipeline \|>/);
+    });
+
+    it("rejects catch outside pipe position inside a let", () => {
+      expect(() => parseExpr("let x = catch e -> 0 in x")).toThrow(/catch must follow a pipeline \|>/);
     });
   });
 

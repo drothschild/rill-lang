@@ -55,6 +55,11 @@ class Parser {
         left = { kind: "Try", expr: left, span: { start: left.span.start, end: qToken.span.end } };
         continue;
       }
+      // Postfix call: any expression followed by ( is a function application
+      if (this.at(TokenKind.LParen) && POSTFIX_BP >= minBp) {
+        left = this.parseCallArgs(left);
+        continue;
+      }
       const token = this.peek();
       const bp = infixBp(token.kind);
       if (bp === null || bp[0] < minBp) break;
@@ -90,12 +95,7 @@ class Parser {
       }
       case TokenKind.Ident: {
         this.advance();
-        let expr: Expr = { kind: "Ident", name: token.lexeme, span: token.span };
-        // Handle function call: ident followed by (
-        while (this.at(TokenKind.LParen)) {
-          expr = this.parseCallArgs(expr);
-        }
-        return expr;
+        return { kind: "Ident", name: token.lexeme, span: token.span };
       }
       // Let binding
       case TokenKind.Let: {
@@ -122,19 +122,9 @@ class Parser {
         const rbracket = this.expect(TokenKind.RBracket);
         return { kind: "List", elements, span: { start: lbracket.span.start, end: rbracket.span.end } };
       }
-      // Catch expression
+      // Catch expression — only valid as the right-hand side of |> (see led)
       case TokenKind.Catch: {
-        const catchToken = this.advance();
-        const errorName = this.expect(TokenKind.Ident).lexeme;
-        this.expect(TokenKind.Arrow);
-        const fallback = this.parseExpr(0);
-        return {
-          kind: "Catch",
-          expr: { kind: "UnitLit", span: catchToken.span } as Expr, // placeholder — pipe fills in actual expr
-          errorName,
-          fallback,
-          span: { start: catchToken.span.start, end: fallback.span.end },
-        };
+        throw new Error(`catch must follow a pipeline |> at line ${token.span.start.line}, col ${token.span.start.col}`);
       }
       // Unary operators
       case TokenKind.Bang: {
@@ -293,6 +283,22 @@ class Parser {
     return result;
   }
 
+  parseCatch(): Expr {
+    const catchToken = this.expect(TokenKind.Catch);
+    const errorName = this.expect(TokenKind.Ident).lexeme;
+    this.expect(TokenKind.Arrow);
+    // Stop the fallback before pipe operator so pipes stay at the outer level,
+    // same convention as fn bodies (|> has left bp 5, so minBp 6 stops before pipes)
+    const fallback = this.parseExpr(6);
+    return {
+      kind: "Catch",
+      expr: { kind: "UnitLit", span: catchToken.span } as Expr, // placeholder — pipe fills in actual expr
+      errorName,
+      fallback,
+      span: { start: catchToken.span.start, end: fallback.span.end },
+    };
+  }
+
   parseMatch(): Expr {
     const matchToken = this.expect(TokenKind.Match);
     const subject = this.parseExpr(0);
@@ -404,7 +410,7 @@ class Parser {
 
     // Pipe operator creates Pipe node, not BinOp
     if (opToken.kind === TokenKind.Pipe) {
-      const right = this.parseExpr(bp[1]);
+      const right = this.at(TokenKind.Catch) ? this.parseCatch() : this.parseExpr(bp[1]);
       return {
         kind: "Pipe",
         left,
