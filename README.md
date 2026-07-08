@@ -47,6 +47,36 @@ let x = 5 in x + 1
 let rec fib = fn(n) -> match n <= 1 { true -> n, false -> fib(n-1) + fib(n-2) } in fib(10)
 ```
 
+`in` is optional: without it, the rest of the expression is the body, so sequential
+bindings read top-to-bottom. `_` is accepted as a binder (in `let`, `fn` params, and
+`catch`) for values you don't need to name.
+
+```
+let x = 5
+let y = 10
+x + y   -- => 15
+```
+
+Before/after with a real rule (dashboard.lv), using record field punning for the result:
+
+```
+-- Before
+let total = length(jobs) in
+let warm_count = length(filter(fn(j) -> j.application_type == "warm", jobs)) in
+let cold_count = length(filter(fn(j) -> j.application_type == "cold", jobs)) in
+{
+  total: total,
+  warm_count: warm_count,
+  cold_count: cold_count
+}
+
+-- After
+let total = length(jobs)
+let warm_count = length(filter(fn(j) -> j.application_type == "warm", jobs))
+let cold_count = length(filter(fn(j) -> j.application_type == "cold", jobs))
+{ total, warm_count, cold_count }
+```
+
 ### Functions (auto-curried)
 ```
 let add = fn(a, b) -> a + b
@@ -107,11 +137,45 @@ let area = fn(shape) -> match shape {
 in area(Rect(3, 4))   -- => 12
 ```
 
+### If/Then/Else
+`if` is an expression, so `else` is always required — every `if` produces a value. Both branches must have the same type, and chained `else if` nests naturally:
+```
+let x = 5 in
+if x > 10 then "big"
+else if x > 3 then "mid"
+else "small"
+-- => "mid"
+```
+
+Rules that used to encode conditions as a match on a tuple of booleans read better with `if`. Before:
+```
+-- Injected: job (Record), is_active (Bool)
+{
+  follow_up_due: match (is_active, job.follow_up_date_passed) {
+    (true, true) -> true,
+    _ -> false
+  }
+}
+```
+After:
+```
+{
+  follow_up_due: if is_active then job.follow_up_date_passed else false
+}
+```
+
+Branches parse greedily, so a trailing `|>` binds inside the `else` branch (just like `let ... in` bodies). Parenthesize the `if` to pipe its result:
+```
+if c then a else b |> f     -- pipes b into f, then picks a or (b |> f)
+(if c then a else b) |> f   -- pipes the chosen value into f
+```
+
 ### Data Structures
 ```
 [1, 2, 3]                    -- Lists
 (1, "hello")                 -- Tuples
 { name: "Alice", age: 30 }   -- Records
+{ name, age }                -- Record punning: { name: name, age: age }
 Ok(42)                        -- Tagged values
 ```
 

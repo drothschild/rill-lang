@@ -225,4 +225,106 @@ describe("Row unification", () => {
 
     expect(() => unify(closedRecord1, closedRecord2)).toThrow(/missing field/);
   });
+
+  it("unifies two closed records with identical field sets (terminates)", () => {
+    // { a: Int } CLOSED vs { a: Int } CLOSED — must succeed, not recurse forever
+    const t1: Type = {
+      kind: "TRecord",
+      fields: new Map([["a", { kind: "TCon", name: "Int" }]]),
+      rest: null,
+    };
+    const t2: Type = {
+      kind: "TRecord",
+      fields: new Map([["a", { kind: "TCon", name: "Int" }]]),
+      rest: null,
+    };
+
+    const subst = unify(t1, t2);
+    expect(subst.size).toBe(0);
+  });
+
+  it("unifies closed records pointwise, solving field type variables", () => {
+    const a = freshTypeVar() as { kind: "TVar"; id: number };
+    const t1: Type = { kind: "TRecord", fields: new Map([["x", a]]), rest: null };
+    const t2: Type = {
+      kind: "TRecord",
+      fields: new Map([["x", { kind: "TCon", name: "Int" }]]),
+      rest: null,
+    };
+
+    const subst = unify(t1, t2);
+    expect(applySubst(subst, a)).toEqual({ kind: "TCon", name: "Int" });
+  });
+
+  it("fails when closed records have disjoint field sets", () => {
+    const t1: Type = {
+      kind: "TRecord",
+      fields: new Map([["a", { kind: "TCon", name: "Int" }]]),
+      rest: null,
+    };
+    const t2: Type = {
+      kind: "TRecord",
+      fields: new Map([["b", { kind: "TCon", name: "String" }]]),
+      rest: null,
+    };
+
+    expect(() => unify(t1, t2)).toThrow(/missing field/);
+  });
+
+  it("fails when closed records share fields but field types conflict", () => {
+    const t1: Type = {
+      kind: "TRecord",
+      fields: new Map([["a", { kind: "TCon", name: "Int" }]]),
+      rest: null,
+    };
+    const t2: Type = {
+      kind: "TRecord",
+      fields: new Map([["a", { kind: "TCon", name: "String" }]]),
+      rest: null,
+    };
+
+    expect(() => unify(t1, t2)).toThrow(/Int|String/);
+  });
+});
+
+describe("Tag unification", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("occurs check catches a tag wrapping its own type variable", () => {
+    const a = freshTypeVar();
+    expect(() => unify(a, { kind: "TTag", tag: "Some", args: [a] })).toThrow(/infinite type/);
+  });
+
+  it("unifies identical tags pointwise", () => {
+    const a = freshTypeVar() as { kind: "TVar"; id: number };
+    const subst = unify(
+      { kind: "TTag", tag: "Some", args: [a] },
+      { kind: "TTag", tag: "Some", args: [{ kind: "TCon", name: "Int" }] },
+    );
+    expect(applySubst(subst, a)).toEqual({ kind: "TCon", name: "Int" });
+  });
+
+  it("unifies identical nullary tags", () => {
+    const subst = unify(
+      { kind: "TTag", tag: "None", args: [] },
+      { kind: "TTag", tag: "None", args: [] },
+    );
+    expect(subst.size).toBe(0);
+  });
+
+  it("fails on different tags with a message naming both", () => {
+    const t1: Type = { kind: "TTag", tag: "Some", args: [{ kind: "TCon", name: "Int" }] };
+    const t2: Type = { kind: "TTag", tag: "None", args: [] };
+    expect(() => unify(t1, t2)).toThrow(/tag Some.*tag None/);
+  });
+
+  it("fails on the same tag with different arity", () => {
+    const t1: Type = { kind: "TTag", tag: "Pair", args: [{ kind: "TCon", name: "Int" }] };
+    const t2: Type = {
+      kind: "TTag",
+      tag: "Pair",
+      args: [{ kind: "TCon", name: "Int" }, { kind: "TCon", name: "Int" }],
+    };
+    expect(() => unify(t1, t2)).toThrow(/arity/);
+  });
 });

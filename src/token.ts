@@ -16,6 +16,8 @@ export enum TokenKind {
   Catch = "Catch",
   In = "In",
   If = "If",
+  Then = "Then",
+  Else = "Else",
 
   // Identifiers
   Ident = "Ident",

@@ -49,11 +49,42 @@ export function unify(t1: Type, t2: Type, subst: Substitution = new Map()): Subs
       if (!t1.fields.has(k)) only2.set(k, v);
     }
 
-    // 2 & 3. Push one-side-only fields into the OTHER side's row tail, sharing a fresh tail.
-    // t1's extra fields (only1) must be absorbed by t2's tail; t2's extras (only2) by t1's tail.
+    // 2. A closed record cannot grow: if the other side demands fields it lacks, fail.
+    if (t1.rest === null && only2.size > 0) throw missingFieldsError(only2);
+    if (t2.rest === null && only1.size > 0) throw missingFieldsError(only1);
+
+    // 3. Both closed with the same field set: nothing left to unify.
+    if (t1.rest === null && t2.rest === null) return subst;
+
+    // 4. One side closed: the open side's tail is exactly the closed side's leftover
+    // fields, as a closed row (no fresh tail vars, so unification terminates).
+    if (t1.rest === null) {
+      return unify(t2.rest!, { kind: "TRecord", fields: only1, rest: null }, subst);
+    }
+    if (t2.rest === null) {
+      return unify(t1.rest, { kind: "TRecord", fields: only2, rest: null }, subst);
+    }
+
+    // 5. Both open: push one-side-only fields into the OTHER side's row tail, sharing
+    // a fresh residual tail. t1's extra fields (only1) must be absorbed by t2's tail;
+    // t2's extras (only2) by t1's tail.
     const sharedTail = freshTypeVar();
-    subst = unifyRowTail(t1.rest, only2, sharedTail, subst);
-    subst = unifyRowTail(t2.rest, only1, sharedTail, subst);
+    subst = unify(t1.rest, rowWithTail(only2, sharedTail), subst);
+    return unify(t2.rest, rowWithTail(only1, sharedTail), subst);
+  }
+
+  if (t1.kind === "TTag" && t2.kind === "TTag") {
+    if (t1.tag !== t2.tag) {
+      throw new TypeError(`Cannot unify tag ${t1.tag} with tag ${t2.tag}`);
+    }
+    if (t1.args.length !== t2.args.length) {
+      throw new TypeError(
+        `Tag ${t1.tag} arity mismatch: ${t1.args.length} vs ${t2.args.length}`
+      );
+    }
+    for (let i = 0; i < t1.args.length; i++) {
+      subst = unify(t1.args[i], t2.args[i], subst);
+    }
     return subst;
   }
 
@@ -67,32 +98,15 @@ function bindVar(id: number, t: Type, subst: Substitution): Substitution {
   return subst;
 }
 
-// Unify a record's row tail against "the fields the other record has that this one lacks,
-// plus a shared residual tail". A null tail means a CLOSED record: it may only match when it
-// is asked to provide no extra fields.
-function unifyRowTail(
-  rest: Type | null,
-  missingFields: Map<string, Type>,
-  sharedTail: Type,
-  subst: Substitution
-): Substitution {
-  if (rest === null) {
-    // Closed record: cannot grow. If the other side demands fields we don't have, fail.
-    if (missingFields.size > 0) {
-      throw new TypeError(
-        `record is missing field(s): ${[...missingFields.keys()].join(", ")}`
-      );
-    }
-    // No extra fields required; the shared tail is therefore the empty closed row.
-    return unify(sharedTail, { kind: "TRecord", fields: new Map(), rest: null }, subst);
-  }
-  // Open record: its tail must equal {missingFields | sharedTail}
-  // (or just sharedTail when there are no missing fields).
-  const target: Type =
-    missingFields.size === 0
-      ? sharedTail
-      : { kind: "TRecord", fields: missingFields, rest: sharedTail };
-  return unify(rest, target, subst);
+function missingFieldsError(missingFields: Map<string, Type>): TypeError {
+  return new TypeError(
+    `record is missing field(s): ${[...missingFields.keys()].join(", ")}`
+  );
+}
+
+// The row {fields | tail}, or just the tail when there are no fields.
+function rowWithTail(fields: Map<string, Type>, tail: Type): Type {
+  return fields.size === 0 ? tail : { kind: "TRecord", fields, rest: tail };
 }
 
 function occursIn(id: number, t: Type, subst: Substitution): boolean {
@@ -102,6 +116,7 @@ function occursIn(id: number, t: Type, subst: Substitution): boolean {
   if (t.kind === "TList") return occursIn(id, t.element, subst);
   if (t.kind === "TTuple") return t.elements.some((el) => occursIn(id, el, subst));
   if (t.kind === "TResult") return occursIn(id, t.ok, subst);
+  if (t.kind === "TTag") return t.args.some((a) => occursIn(id, a, subst));
   if (t.kind === "TRecord") {
     return (
       [...t.fields.values()].some((v) => occursIn(id, v, subst)) ||
