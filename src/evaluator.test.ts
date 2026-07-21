@@ -129,6 +129,24 @@ describe("Evaluator", () => {
     it("matches booleans", () => {
       expect(runPrint("match true { true -> 1, false -> 0 }")).toBe("1");
     });
+
+    it("guard false falls through to next arm", () => {
+      expect(runProgramPrint(`
+        match Some(5) { Some(x) if x > 10 -> "big", Some(x) -> "small", None -> "none" }
+      `)).toBe('"small"');
+    });
+
+    it("guard true selects the arm", () => {
+      expect(runProgramPrint(`
+        match Some(50) { Some(x) if x > 10 -> "big", Some(x) -> "small", None -> "none" }
+      `)).toBe('"big"');
+    });
+
+    it("guard sees pattern bindings", () => {
+      expect(runProgramPrint(`
+        match Some(3) { Some(x) if x == 3 -> x * 2, _ -> 0 }
+      `)).toBe("6");
+    });
   });
 
   describe("error handling", () => {

@@ -103,6 +103,13 @@ function evalExpr(expr: Expr, env: Map<string, Value>, constructorArities?: Map<
         if (bindings !== null) {
           const matchEnv = new Map(env);
           for (const [k, v] of bindings) matchEnv.set(k, v);
+          // If there's a guard, evaluate it; if false, continue to next case
+          if (c.guard) {
+            const guardResult = evalExpr(c.guard, matchEnv, constructorArities);
+            if (guardResult.kind !== "Bool" || !guardResult.value) {
+              continue;
+            }
+          }
           return evalExpr(c.body, matchEnv, constructorArities);
         }
       }
