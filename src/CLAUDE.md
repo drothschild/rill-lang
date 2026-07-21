@@ -79,15 +79,22 @@ type Resolver = (path: string, fromPath?: string) => string;
 - Used at load-time to resolve `import` declarations
 - Entry rule source is loaded via `resolve(config.entry)`
 
-## Declaration-Only Module Files (Phase 4 Design Decision)
+## Module File Shape (Phase 4)
 
-Modules may contain only type and alias declarations with no body expression:
+Every module (and the entry program) is parsed by `parseProgram`, whose `body`
+is a REQUIRED terminal expression. A module therefore always ends in an
+expression even when its purpose is only to export declarations or `let`
+bindings — use a throwaway terminal like `0` or `true`:
 ```
-import h from "helpers"
+import "shared" as shared_util
 type Status = Active | Inactive
-alias Config = { name: String, level: Int }
+let add = fn(a) -> fn(b) -> shared_util.combine(a)(b)
+0
 ```
-These modules export their type/alias declarations for use by other modules. No runtime behavior; no let bindings required.
+Imports, `type`/`alias` declarations, and top-level `let` bindings are what get
+exported to importing modules; the trailing expression is evaluated (to surface
+errors) but its value is discarded. A file with no terminal expression is a
+parse error — declaration-only files are not valid.
 
 ## Invariants
 - **Prelude typing distinguishes list vs string length**: `length : List(a) -> Int`
