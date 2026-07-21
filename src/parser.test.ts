@@ -796,6 +796,63 @@ describe("Parser", () => {
       expect(prog.header?.name).toBe("f");
       expect(prog.body).toMatchObject({ kind: "Ident", name: "x" });
     });
+
+    it("parses a single import declaration", () => {
+      const prog = parseProgWithDecls('import "workout/helpers" as h\n42');
+      expect(prog.imports).toHaveLength(1);
+      expect(prog.imports[0]).toMatchObject({
+        kind: "ImportDecl",
+        path: "workout/helpers",
+        alias: "h",
+      });
+      expect(prog.body).toMatchObject({ kind: "IntLit", value: 42 });
+    });
+
+    it("parses multiple import declarations", () => {
+      const prog = parseProgWithDecls(
+        'import "helpers/a" as h1\nimport "helpers/b" as h2\n42'
+      );
+      expect(prog.imports).toHaveLength(2);
+      expect(prog.imports[0]).toMatchObject({
+        kind: "ImportDecl",
+        path: "helpers/a",
+        alias: "h1",
+      });
+      expect(prog.imports[1]).toMatchObject({
+        kind: "ImportDecl",
+        path: "helpers/b",
+        alias: "h2",
+      });
+    });
+
+    it("parses imports mixed with type declarations", () => {
+      const prog = parseProgWithDecls(
+        'import "helpers" as h\ntype Phase = Idle | Working\n42'
+      );
+      expect(prog.imports).toHaveLength(1);
+      expect(prog.declarations).toHaveLength(1);
+      expect(prog.imports[0]).toMatchObject({
+        kind: "ImportDecl",
+        path: "helpers",
+        alias: "h",
+      });
+      expect(prog.declarations[0]).toMatchObject({
+        kind: "TypeDecl",
+        name: "Phase",
+      });
+    });
+
+    it("rejects import without 'as' keyword", () => {
+      expect(() => parseProgWithDecls('import "helpers" h\n42')).toThrow();
+    });
+
+    it("rejects import with missing path", () => {
+      expect(() => parseProgWithDecls('import as h\n42')).toThrow();
+    });
+
+    it("rejects import with missing alias", () => {
+      expect(() => parseProgWithDecls('import "helpers" as\n42')).toThrow();
+    });
   });
 
   describe("type annotations - named types", () => {

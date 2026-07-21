@@ -25,6 +25,13 @@ export interface AliasDecl {
   span: Span;
 }
 
+export interface ImportDecl {
+  kind: "ImportDecl";
+  path: string;
+  alias: string;
+  span: Span;
+}
+
 export type Declaration = TypeDecl | AliasDecl;
 
 // ── Expressions ──────────────────────────────────────────

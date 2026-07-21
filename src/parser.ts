@@ -1,5 +1,5 @@
 import { Token, TokenKind } from "./token";
-import { Expr, Declaration, TypeDecl, AliasDecl, ConstructorDef } from "./ast";
+import { Expr, Declaration, TypeDecl, AliasDecl, ConstructorDef, ImportDecl } from "./ast";
 import { Span } from "./span";
 import { Type, freshTypeVar } from "./types";
 
@@ -24,6 +24,7 @@ export interface RuleHeader {
 }
 
 export interface Program {
+  imports: ImportDecl[];
   declarations: Declaration[];
   header: RuleHeader | null;
   body: Expr;
@@ -33,11 +34,14 @@ export interface Program {
 // followed by the body expression. Headerless sources parse exactly as parse().
 export function parseProgram(tokens: Token[]): Program {
   const parser = new Parser(tokens);
+  const imports: ImportDecl[] = [];
   const declarations: Declaration[] = [];
 
-  // Parse declarations (type and alias)
-  while (parser.at(TokenKind.Type) || parser.at(TokenKind.Alias)) {
-    if (parser.at(TokenKind.Type)) {
+  // Parse imports and declarations (type and alias) in any order
+  while (parser.at(TokenKind.Import) || parser.at(TokenKind.Type) || parser.at(TokenKind.Alias)) {
+    if (parser.at(TokenKind.Import)) {
+      imports.push(parser.parseImportDecl());
+    } else if (parser.at(TokenKind.Type)) {
       declarations.push(parser.parseTypeDecl());
     } else {
       declarations.push(parser.parseAliasDecl());
@@ -47,7 +51,7 @@ export function parseProgram(tokens: Token[]): Program {
   const header = parser.at(TokenKind.Rule) ? parser.parseRuleHeader() : null;
   const body = parser.parseExpr(0);
   parser.expect(TokenKind.EOF);
-  return { declarations, header, body };
+  return { imports, declarations, header, body };
 }
 
 class Parser {
@@ -480,6 +484,21 @@ class Parser {
 
     const span = this.spanFrom(startToken.span);
     return { kind: "AliasDecl", name, params, type, span };
+  }
+
+  parseImportDecl(): ImportDecl {
+    const startToken = this.expect(TokenKind.Import);
+    const pathToken = this.expect(TokenKind.String);
+    const path = pathToken.lexeme.slice(1, -1); // Remove quotes
+    this.expect(TokenKind.Ident); // Expect 'as'
+    if (this.tokens[this.pos - 1].lexeme !== "as") {
+      throw new Error(
+        `Expected 'as' keyword in import statement at line ${pathToken.span.start.line}, col ${pathToken.span.start.col}`
+      );
+    }
+    const alias = this.expect(TokenKind.Ident).lexeme;
+    const span = this.spanFrom(startToken.span);
+    return { kind: "ImportDecl", path, alias, span };
   }
 
   parseTypeAnn(activeParams?: string[]): Type {
