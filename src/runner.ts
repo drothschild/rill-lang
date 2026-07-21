@@ -24,13 +24,23 @@ interface RunOptions {
 /**
  * Creates a filesystem resolver that resolves import paths relative to a base directory.
  * Appends .lv extension if the import path has no extension.
- * Resolves paths relative to the importing file's directory.
+ * When fromPath is provided, resolves relative to that file's directory;
+ * otherwise resolves relative to baseDir.
+ * Maintains backward compatibility for single-arg resolvers (in-memory test resolvers).
  */
 export function createFsResolver(baseDir: string): Resolver {
-  return (importPath: string) => {
+  return (importPath: string, fromPath?: string) => {
     // Append .lv extension if no extension present
     const fullPath = importPath.includes(".") ? importPath : `${importPath}.lv`;
-    const resolvedPath = path.resolve(baseDir, fullPath);
+
+    // If fromPath is provided, resolve relative to that file's directory
+    // Otherwise resolve relative to baseDir
+    let resolveDir = baseDir;
+    if (fromPath) {
+      resolveDir = path.dirname(path.resolve(baseDir, fromPath));
+    }
+
+    const resolvedPath = path.resolve(resolveDir, fullPath);
     return fs.readFileSync(resolvedPath, "utf-8");
   };
 }
@@ -142,11 +152,10 @@ export function runSource(source: string, options?: RunOptions): RunResult {
 
     // Add module bindings to the evaluation environment
     if (moduleValues) {
-      for (const [importDecl] of program.imports.entries()) {
-        const modulePath = program.imports[importDecl].path;
-        const moduleRecord = moduleValues.get(modulePath);
+      for (const importDecl of program.imports) {
+        const moduleRecord = moduleValues.get(importDecl.path);
         if (moduleRecord) {
-          env.set(program.imports[importDecl].alias, { kind: "Record", fields: moduleRecord });
+          env.set(importDecl.alias, { kind: "Record", fields: moduleRecord });
         }
       }
     }

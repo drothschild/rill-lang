@@ -6,11 +6,12 @@ import { inferTopLevelLets, TypeEnv } from "./typechecker";
 import { evaluateProgram } from "./evaluator";
 import { Value } from "./values";
 
-export type Resolver = (path: string) => string;
+export type Resolver = (path: string, fromPath?: string) => string;
 
 export interface LoadedModule {
   path: string;
   program: Program;
+  source: string;
 }
 
 export interface ModuleGraph {
@@ -48,7 +49,7 @@ export function loadModules(
     if (importStack.includes(path)) {
       const cycleStart = importStack.indexOf(path);
       const chain = [...importStack.slice(cycleStart), path];
-      throw new Error(`Import cycle: ${chain.join(" -> ")}`);
+      throw new RillError(`Import cycle: ${chain.join(" -> ")}`, undefined);
     }
 
     // Parse the module
@@ -61,10 +62,11 @@ export function loadModules(
     for (const importDecl of program.imports) {
       let importedSource: string;
       try {
-        importedSource = resolve(importDecl.path);
+        importedSource = resolve(importDecl.path, path);
       } catch (error) {
-        throw new Error(
-          `Failed to resolve import "${importDecl.path}" from module "${path}": ${error instanceof Error ? error.message : String(error)}`
+        throw new RillError(
+          `Failed to resolve import "${importDecl.path}" from module "${path}": ${error instanceof Error ? error.message : String(error)}`,
+          undefined
         );
       }
       loadModule(importedSource, importDecl.path);
@@ -74,7 +76,7 @@ export function loadModules(
     importStack.pop();
 
     // Add to graph in post-order (after dependencies)
-    modules.set(path, { path, program });
+    modules.set(path, { path, program, source });
     order.push(path);
   }
 
@@ -128,8 +130,9 @@ export function buildGraphDeclEnv(graph: ModuleGraph): DeclEnv {
       for (const name of moduleEnv.unions.keys()) {
         if (mergedEnv.unions.has(name) || mergedEnv.aliases.has(name)) {
           const existingModule = declSources.get(name)!;
-          throw new Error(
-            `Duplicate type/alias name: ${name} (declared in both "${existingModule}" and "${modulePath}")`
+          throw new RillError(
+            `Duplicate type/alias name: ${name} (declared in both "${existingModule}" and "${modulePath}")`,
+            undefined
           );
         }
       }
@@ -137,8 +140,9 @@ export function buildGraphDeclEnv(graph: ModuleGraph): DeclEnv {
       for (const name of moduleEnv.aliases.keys()) {
         if (mergedEnv.unions.has(name) || mergedEnv.aliases.has(name)) {
           const existingModule = declSources.get(name)!;
-          throw new Error(
-            `Duplicate type/alias name: ${name} (declared in both "${existingModule}" and "${modulePath}")`
+          throw new RillError(
+            `Duplicate type/alias name: ${name} (declared in both "${existingModule}" and "${modulePath}")`,
+            undefined
           );
         }
       }
@@ -148,8 +152,9 @@ export function buildGraphDeclEnv(graph: ModuleGraph): DeclEnv {
           const existingModule = declSources.get(name)!;
           const existingUnion = mergedEnv.ctors.get(name)!.union;
           const newUnion = moduleEnv.ctors.get(name)!.union;
-          throw new Error(
-            `Constructor ${name} defined in both ${existingUnion} (from "${existingModule}") and ${newUnion} (from "${modulePath}")`
+          throw new RillError(
+            `Constructor ${name} defined in both ${existingUnion} (from "${existingModule}") and ${newUnion} (from "${modulePath}")`,
+            undefined
           );
         }
       }
@@ -172,14 +177,11 @@ export function buildGraphDeclEnv(graph: ModuleGraph): DeclEnv {
         declSources.set(name, modulePath);
       }
     } catch (error) {
-      // Re-throw as a RillError if it's from our collision detection
-      if (error instanceof Error && error.message.includes("Duplicate")) {
-        throw new RillError(error.message, undefined as any);
-      }
-      // Or if it's already a RillError from buildDeclEnv
+      // Re-throw RillError or other errors as-is
       if (error instanceof RillError) {
         throw error;
       }
+      // If it's a plain Error from buildDeclEnv, re-throw as-is
       throw error;
     }
   }
@@ -222,7 +224,8 @@ export function checkModuleGraph(
       if (importAliases.has(current.name)) {
         throw new RillError(
           `Local let "${current.name}" shadows import alias in module "${modulePath}"`,
-          current.span
+          current.span,
+          loadedModule.source
         );
       }
       current = current.body;
@@ -237,7 +240,7 @@ export function checkModuleGraph(
       const schemes = inferTopLevelLets(
         program.body,
         moduleTypeEnv,
-        program.body.toString(),  // This is approximate; ideally we'd have the source
+        loadedModule.source,
         declEnv,
         importAliases,
         moduleExports
@@ -246,9 +249,9 @@ export function checkModuleGraph(
       // Store this module's exports
       moduleExports.set(modulePath, schemes);
     } catch (error) {
-      // Re-wrap module errors with module context
+      // Re-wrap module errors with module context, wrapping the raw message before formatting
       if (error instanceof RillError) {
-        const wrappedMessage = `in module "${modulePath}": ${error.message}`;
+        const wrappedMessage = `in module "${modulePath}": ${error.msg}`;
         throw new RillError(wrappedMessage, error.span, error.source);
       }
       throw error;

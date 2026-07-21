@@ -114,6 +114,11 @@ export function infer(
   importAliases?: Map<string, string>,
   moduleExports?: Map<string, Map<string, Scheme>>
 ): Type {
+  // Save prior state for re-entrancy
+  const savedSource = _source;
+  const savedImportAliases = _importAliases;
+  const savedModuleExports = _moduleExports;
+
   _source = source;
   _importAliases = importAliases;
   _moduleExports = moduleExports;
@@ -123,8 +128,10 @@ export function infer(
     const [type, subst] = inferExpr(expr, defaultEnv, new Map(), defaultDeclEnv);
     return applySubst(subst, type);
   } finally {
-    _importAliases = undefined;
-    _moduleExports = undefined;
+    // Restore prior state
+    _source = savedSource;
+    _importAliases = savedImportAliases;
+    _moduleExports = savedModuleExports;
   }
 }
 
@@ -873,6 +880,11 @@ export function inferTopLevelLets(
   importAliases?: Map<string, string>,
   moduleExports?: Map<string, Map<string, Scheme>>
 ): Map<string, Scheme> {
+  // Save prior state for re-entrancy
+  const savedSource = _source;
+  const savedImportAliases = _importAliases;
+  const savedModuleExports = _moduleExports;
+
   _source = source;
   _importAliases = importAliases;
   _moduleExports = moduleExports;
@@ -897,8 +909,10 @@ export function inferTopLevelLets(
     // Also infer the remaining body to catch type errors
     inferExpr(current, currentEnv, subst, declEnv);
   } finally {
-    _importAliases = undefined;
-    _moduleExports = undefined;
+    // Restore prior state
+    _source = savedSource;
+    _importAliases = savedImportAliases;
+    _moduleExports = savedModuleExports;
   }
 
   return schemes;

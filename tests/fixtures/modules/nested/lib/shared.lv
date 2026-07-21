@@ -1,0 +1,3 @@
+let combine = fn(a) -> fn(b) -> a + b
+
+42

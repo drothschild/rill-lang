@@ -1,0 +1,3 @@
+import "lib/helpers" as h
+
+h.add(1)(2)

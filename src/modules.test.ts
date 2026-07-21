@@ -253,7 +253,7 @@ describe("Module Graph Checking", () => {
         entry: 'import "helpers" as h\n42',
       };
 
-      const resolver = (path: string) => {
+      const resolver = (path: string, fromPath?: string) => {
         const src = sources[path];
         if (!src) throw new Error(`Module not found: ${path}`);
         return src;
@@ -262,14 +262,28 @@ describe("Module Graph Checking", () => {
       const graph = loadModules(sources.entry, "entry", resolver);
       const declEnv = buildGraphDeclEnv(graph);
       const typeEnv = createPreludeTypeEnv();
-      expect(() => checkModuleGraph(graph, declEnv, typeEnv)).toThrow();
+
+      let error: Error | undefined;
       try {
         checkModuleGraph(graph, declEnv, typeEnv);
       } catch (e) {
-        if (e instanceof RillError) {
-          expect(e.message).toMatch(/helpers/);
-        }
+        error = e as Error;
       }
+
+      // Assert that an error was thrown and it's a RillError
+      expect(error).toBeDefined();
+      expect(error instanceof RillError).toBe(true);
+
+      // Assert that the error message contains the module path
+      expect(error!.message).toMatch(/helpers/);
+
+      // Assert that the error message contains the helper's actual source text (1 + "x" or similar)
+      expect(error!.message).toMatch(/1.*\+|add/);
+
+      // Assert that "Error at" appears exactly once in the formatted error
+      const errorAtMatches = error!.message.match(/Error at/g);
+      expect(errorAtMatches).toBeDefined();
+      expect(errorAtMatches!.length).toBe(1);
     });
 
     it("detects shadowing of import alias by local let", () => {
