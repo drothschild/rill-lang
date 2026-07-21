@@ -193,6 +193,24 @@ function evalExpr(expr: Expr, env: Map<string, Value>, constructorArities?: Map<
       return { kind: "Record", fields };
     }
 
+    case "RecordUpdate": {
+      // Look up base value
+      const baseVal = env.get(expr.base);
+      if (baseVal === undefined) throw new Error(`Undefined variable: ${expr.base}`);
+      if (baseVal.kind !== "Record") throw new Error(`RecordUpdate base is not a record: ${baseVal.kind}`);
+
+      // Create a copy of the base record's fields
+      const newFields = new Map(baseVal.fields);
+
+      // Update each field
+      for (const field of expr.fields) {
+        const newVal = evalExpr(field.value, env, constructorArities);
+        newFields.set(field.name, newVal);
+      }
+
+      return { kind: "Record", fields: newFields };
+    }
+
     case "FieldAccess": {
       const record = evalExpr(expr.expr, env, constructorArities);
       if (record.kind !== "Record") throw new Error("Field access on non-record");

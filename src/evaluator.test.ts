@@ -244,6 +244,24 @@ describe("Evaluator", () => {
       `)).toBe("1");
     });
 
+    it("evaluates record update with single field", () => {
+      expect(runPrint('let s = { a: 1, b: "x" } in { s | a: 2 }')).toContain("a");
+      expect(runPrint('let s = { a: 1, b: "x" } in { s | a: 2 }.a')).toBe("2");
+    });
+
+    it("evaluates record update with multiple fields", () => {
+      expect(runPrint('let s = { a: 1, b: 2 } in { s | a: 10, b: 20 }.a')).toBe("10");
+      expect(runPrint('let s = { a: 1, b: 2 } in { s | a: 10, b: 20 }.b')).toBe("20");
+    });
+
+    it("preserves original record when updated", () => {
+      expect(runPrint('let s = { a: 1 } in let u = { s | a: 2 } in s.a')).toBe("1");
+    });
+
+    it("evaluates record update result in expressions", () => {
+      expect(runPrint('let s = { x: 5 } in { s | x: 10 }.x + 1')).toBe("11");
+    });
+
     it("evaluates tagged values", () => {
       expect(runPrint("Ok(42)")).toBe("Ok(42)");
       expect(runPrint("None")).toBe("None");
