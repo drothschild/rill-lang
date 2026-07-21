@@ -314,7 +314,8 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution, declEnv: DeclE
       if (expr.right.kind === "Catch") {
         // catch unwraps Result: if leftT is Result(T), return T unified with fallback
         const okT = freshTypeVar();
-        const s2 = unify(applySubst(s1, leftT), { kind: "TResult", ok: okT }, s1);
+        const resultType: Type = { kind: "TUnion", name: "Result", args: [okT] };
+        const s2 = unify(applySubst(s1, leftT), resultType, s1);
         const catchEnv = new Map(env);
         catchEnv.set(expr.right.errorName, mono({ kind: "TCon", name: "String" }));
         const [fallbackT, s3] = inferExpr(expr.right.fallback, catchEnv, s2, declEnv);
@@ -327,7 +328,8 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution, declEnv: DeclE
         const callRetT = freshTypeVar();
         const s3 = unify(applySubst(s2, fnT), { kind: "TFn", param: applySubst(s2, leftT), ret: callRetT }, s2);
         const okT = freshTypeVar();
-        const s4 = unify(applySubst(s3, callRetT), { kind: "TResult", ok: okT }, s3);
+        const resultType: Type = { kind: "TUnion", name: "Result", args: [okT] };
+        const s4 = unify(applySubst(s3, callRetT), resultType, s3);
         return [applySubst(s4, okT), s4];
       }
       const [rightT, s2] = inferExpr(expr.right, env, s1, declEnv);
@@ -359,9 +361,10 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution, declEnv: DeclE
     case "Try": {
       const [exprT, s1] = inferExpr(expr.expr, env, subst, declEnv);
       const okT = freshTypeVar();
+      const resultType: Type = { kind: "TUnion", name: "Result", args: [okT] };
       const resolvedExprT = applySubst(s1, exprT);
       try {
-        const s2 = unify(resolvedExprT, { kind: "TResult", ok: okT }, s1);
+        const s2 = unify(resolvedExprT, resultType, s1);
         return [applySubst(s2, okT), s2];
       } catch {
         throw typeError(`The ? operator requires a Result type, but got ${prettyType(resolvedExprT)}`, expr.span);

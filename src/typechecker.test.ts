@@ -639,3 +639,32 @@ describe("Task 9: Match-subject unification for TagPat", () => {
     expect(typeOf(source)).toBe("Float");
   });
 });
+
+describe("Task 10: Try, Catch, Pipe forms with declared Result", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("? unwraps Result declared from prelude", () => {
+    expect(typeOf("Ok(5)?")).toBe("Int");
+  });
+
+  it("? in nested context", () => {
+    expect(typeOf("let x = Ok(1)? in x + 1")).toBe("Int");
+  });
+
+  it("catch binds error as String", () => {
+    // Verify that error is bound as String type
+    resetTypeVarCounter();
+    let env = createPreludeTypeEnv();
+    const src = 'Ok(5) |> catch e -> str_len(e)';
+    const type = infer(parse(lex(src)), env);
+    expect(prettyType(type)).toBe("Int");
+  });
+
+  it("pipe with try operator", () => {
+    expect(typeOf("Ok(5) |> fn(x) -> x? + 1")).toBe("Int");
+  });
+
+  it("? rejects Option type", () => {
+    expect(() => typeOf("Some(5)?")).toThrow(/Result/);
+  });
+});
