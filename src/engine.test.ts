@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { createEngine, TransitionError } from "./engine";
 import { EngineConfig } from "./engine";
 
@@ -91,6 +91,232 @@ describe("Task 4: createEngine construction gate", () => {
 
       const engine = createEngine(config);
       expect(engine.getState()).toBe(42);
+    });
+  });
+});
+
+describe("Task 5: dispatch — state swap, executor fan-out, and Err preservation", () => {
+  describe("Ok path: state swap and executor invocation", () => {
+    it("dispatch returns new state and swaps internal state", () => {
+      const config: EngineConfig<number, string> = {
+        resolve: () => `
+          rule transition(state: Int, event: String) -> Result({ state: Int, effects: List(Unit) })
+          Ok({ state: state + 1, effects: [] })
+        `,
+        entry: "transition.rill",
+        initialState: 10,
+        executors: {},
+      };
+
+      const engine = createEngine(config);
+      const result = engine.dispatch("anything");
+      expect(result).toBe(11);
+      expect(engine.getState()).toBe(11);
+    });
+
+    it("invokes executor for Ping effect (no payload) in effect list", () => {
+      const pingExecutor = vi.fn();
+      const config: EngineConfig<number, string> = {
+        resolve: () => `
+          type Effect = Ping | Sched({ ms: Int })
+          rule transition(state: Int, event: String) -> Result({ state: Int, effects: List(Effect) })
+          Ok({ state: state + 1, effects: [Ping] })
+        `,
+        entry: "transition.rill",
+        initialState: 0,
+        executors: { Ping: pingExecutor },
+      };
+
+      const engine = createEngine(config);
+      engine.dispatch("event1");
+      expect(pingExecutor).toHaveBeenCalledOnce();
+      expect(pingExecutor).toHaveBeenCalledWith(undefined);
+    });
+
+    it("invokes executor for Sched effect (with payload) in effect list", () => {
+      const schedExecutor = vi.fn();
+      const config: EngineConfig<number, string> = {
+        resolve: () => `
+          type Effect = Ping | Sched({ ms: Int })
+          rule transition(state: Int, event: String) -> Result({ state: Int, effects: List(Effect) })
+          Ok({ state: state + 1, effects: [Sched({ ms: 100 })] })
+        `,
+        entry: "transition.rill",
+        initialState: 0,
+        executors: { Sched: schedExecutor },
+      };
+
+      const engine = createEngine(config);
+      engine.dispatch("event1");
+      expect(schedExecutor).toHaveBeenCalledOnce();
+      expect(schedExecutor).toHaveBeenCalledWith({ ms: 100 });
+    });
+
+    it("invokes executors in effect-list order", () => {
+      const callOrder: string[] = [];
+      const config: EngineConfig<number, string> = {
+        resolve: () => `
+          type Effect = First | Second | Third
+          rule transition(state: Int, event: String) -> Result({ state: Int, effects: List(Effect) })
+          Ok({ state: state, effects: [First, Second, Third] })
+        `,
+        entry: "transition.rill",
+        initialState: 0,
+        executors: {
+          First: () => callOrder.push("First"),
+          Second: () => callOrder.push("Second"),
+          Third: () => callOrder.push("Third"),
+        },
+      };
+
+      const engine = createEngine(config);
+      engine.dispatch("event1");
+      expect(callOrder).toEqual(["First", "Second", "Third"]);
+    });
+
+    it("throws TransitionError when effect has no registered executor", () => {
+      const config: EngineConfig<number, string> = {
+        resolve: () => `
+          type Effect = Known | Unknown
+          rule transition(state: Int, event: String) -> Result({ state: Int, effects: List(Effect) })
+          Ok({ state: state + 1, effects: [Unknown] })
+        `,
+        entry: "transition.rill",
+        initialState: 0,
+        executors: { Known: () => {} },
+      };
+
+      const engine = createEngine(config);
+      expect(() => engine.dispatch("event1")).toThrow(TransitionError);
+      expect(() => engine.dispatch("event1")).toThrow(/Unknown/);
+    });
+
+    it("event bridging: converts event value against declared type", () => {
+      const executor = vi.fn();
+      const config: EngineConfig<number, number> = {
+        resolve: () => `
+          rule transition(state: Int, event: Float) -> Result({ state: Int, effects: List(Unit) })
+          Ok({ state: state + 1, effects: [] })
+        `,
+        entry: "transition.rill",
+        initialState: 0,
+        executors: {},
+      };
+
+      const engine = createEngine(config);
+      const result = engine.dispatch(42); // JS int -> Float
+      expect(result).toBe(1);
+    });
+  });
+
+  describe("Err path: preserve state, no executors", () => {
+    it("throws TransitionError with Err message, state unchanged", () => {
+      const executor = vi.fn();
+      const config: EngineConfig<number, string> = {
+        resolve: () => `
+          rule transition(state: Int, event: String) -> Result({ state: Int, effects: List(Unit) })
+          match event {
+            "fail" -> Err("transition failed"),
+            _ -> Ok({ state: state + 1, effects: [] })
+          }
+        `,
+        entry: "transition.rill",
+        initialState: 10,
+        executors: { SomeEffect: executor },
+      };
+
+      const engine = createEngine(config);
+      expect(() => engine.dispatch("fail")).toThrow(TransitionError);
+      expect(() => engine.dispatch("fail")).toThrow(/transition failed/);
+      expect(engine.getState()).toBe(10);
+      expect(executor).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("async executor semantics", () => {
+    it("async executor rejection routes to onExecutorError callback", async () => {
+      const onExecutorError = vi.fn();
+      const testError = new Error("async executor failed");
+      const config: EngineConfig<number, string> = {
+        resolve: () => `
+          type Effect = AsyncOp
+          rule transition(state: Int, event: String) -> Result({ state: Int, effects: List(Effect) })
+          Ok({ state: state + 1, effects: [AsyncOp] })
+        `,
+        entry: "transition.rill",
+        initialState: 0,
+        executors: {
+          AsyncOp: async () => {
+            throw testError;
+          },
+        },
+        onExecutorError,
+      };
+
+      const engine = createEngine(config);
+      const result = engine.dispatch("event");
+      expect(result).toBe(1); // State swapped immediately
+      expect(onExecutorError).not.toHaveBeenCalled(); // Not called yet (async)
+      await new Promise(setImmediate); // Flush microtask queue
+      expect(onExecutorError).toHaveBeenCalledOnce();
+      expect(onExecutorError).toHaveBeenCalledWith(testError, "AsyncOp");
+    });
+
+    it("async executor rejection is rethrown on microtask queue when no onExecutorError", async () => {
+      const unhandledRejections: unknown[] = [];
+      const handler = (reason: unknown) => {
+        unhandledRejections.push(reason);
+      };
+
+      try {
+        process.on("unhandledRejection", handler);
+
+        const testError = new Error("unhandled async error");
+        const config: EngineConfig<number, string> = {
+          resolve: () => `
+            type Effect = AsyncOp
+            rule transition(state: Int, event: String) -> Result({ state: Int, effects: List(Effect) })
+            Ok({ state: state + 1, effects: [AsyncOp] })
+          `,
+          entry: "transition.rill",
+          initialState: 0,
+          executors: {
+            AsyncOp: async () => {
+              throw testError;
+            },
+          },
+        };
+
+        const engine = createEngine(config);
+        const result = engine.dispatch("event");
+        expect(result).toBe(1); // State swapped immediately
+        await new Promise(setImmediate); // Flush microtask queue
+        expect(unhandledRejections).toContain(testError);
+      } finally {
+        process.off("unhandledRejection", handler);
+      }
+    });
+
+    it("sync executor throw propagates out of dispatch, state remains swapped", () => {
+      const testError = new Error("sync executor error");
+      const config: EngineConfig<number, string> = {
+        resolve: () => `
+          type Effect = SyncOp
+          rule transition(state: Int, event: String) -> Result({ state: Int, effects: List(Effect) })
+          Ok({ state: state + 1, effects: [SyncOp] })
+        `,
+        entry: "transition.rill",
+        initialState: 0,
+        executors: {
+          SyncOp: () => {
+            throw testError;
+          },
+        },
+      };
+
+      const engine = createEngine(config);
+      expect(() => engine.dispatch("event")).toThrow(testError);
+      expect(engine.getState()).toBe(1); // State was swapped before executor threw
     });
   });
 });

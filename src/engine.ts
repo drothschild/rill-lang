@@ -1,5 +1,12 @@
 import { Resolver, checkRuleSource } from "./rules";
-import { RuleHeader } from "./parser";
+import { RuleHeader, parseProgram } from "./parser";
+import { loadModules, buildGraphDeclEnv } from "./modules";
+import { jsToRill, rillToJs } from "./bridge";
+import { Value } from "./values";
+import { createPrelude } from "./prelude";
+import { evaluate } from "./evaluator";
+import { Expr } from "./ast";
+import { lex } from "./lexer";
 
 /**
  * Configuration for creating a state machine engine.
@@ -93,6 +100,18 @@ export function createEngine<State, Event>(
     throw new Error("Result record must have exactly state and effects fields");
   }
 
+  // Parse and load the module graph to get declaration environment
+  const moduleGraph = loadModules(entrySource, config.entry, config.resolve);
+  const declEnv = buildGraphDeclEnv(moduleGraph);
+  const prelude = createPrelude();
+
+  // Extract the rule body expression from the parsed program
+  const program = parseProgram(lex(entrySource));
+  if (!program.body) {
+    throw new Error("Entry rule has no body expression");
+  }
+  const ruleBody = program.body;
+
   // Store the header and initial state for dispatch
   let currentState = config.initialState;
 
@@ -101,8 +120,123 @@ export function createEngine<State, Event>(
       return currentState;
     },
     dispatch(event: Event): State {
-      // TODO: Task 5 - implement dispatch logic
-      throw new Error("dispatch not yet implemented");
+      // Convert state and event via jsToRill against header param types
+      const stateParam = header.params[0];
+      const eventParam = header.params[1];
+
+      let rillState: Value;
+      let rillEvent: Value;
+      try {
+        rillState = jsToRill(currentState, stateParam.type, declEnv, "state");
+        rillEvent = jsToRill(event, eventParam.type, declEnv, "event");
+      } catch (error) {
+        throw new Error(
+          `Failed to bridge input values: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+
+      // Evaluate the rule body with parameters bound
+      let result: Value;
+      try {
+        // Create environment with parameters bound by name
+        const env = new Map(prelude);
+        env.set(stateParam.name, rillState);
+        env.set(eventParam.name, rillEvent);
+
+        // Evaluate the rule body expression
+        result = evaluate(ruleBody, env);
+      } catch (error) {
+        throw new Error(
+          `Failed to evaluate transition: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+
+      // Parse the result: should be Ok or Err tag
+      if (result.kind !== "Tag") {
+        throw new Error(
+          `Transition rule did not return a Result tag, got ${result.kind}`
+        );
+      }
+
+      if (result.tag === "Err") {
+        // Error case: extract message, throw TransitionError, preserve state
+        const errMsg = result.args.length > 0 ? rillToJs(result.args[0]) : "unknown error";
+        throw new TransitionError(String(errMsg));
+      }
+
+      if (result.tag !== "Ok") {
+        throw new TransitionError(
+          `Transition rule returned unexpected tag "${result.tag}", expected Ok or Err`
+        );
+      }
+
+      // Ok case: extract {state, effects}, swap state, run executors
+      const okPayload = result.args.length > 0 ? result.args[0] : null;
+      if (!okPayload || okPayload.kind !== "Record") {
+        throw new Error(
+          `Transition rule returned Ok with invalid payload, expected record with state and effects`
+        );
+      }
+
+      const newStateValue = okPayload.fields.get("state");
+      const effectsValue = okPayload.fields.get("effects");
+
+      if (!newStateValue || !effectsValue) {
+        throw new Error(
+          `Result record missing state or effects fields`
+        );
+      }
+
+      // Convert new state back to JS and swap
+      const newState = rillToJs(newStateValue) as State;
+      currentState = newState;
+
+      // Run executors in effect-list order
+      // Effects should be a List value
+      if (effectsValue.kind !== "List") {
+        throw new Error(
+          `Effects must be a list, got ${effectsValue.kind}`
+        );
+      }
+
+      for (const effect of effectsValue.elements) {
+        if (effect.kind !== "Tag") {
+          throw new Error(
+            `Effect must be a tag, got ${effect.kind}`
+          );
+        }
+
+        const executor = config.executors[effect.tag];
+        if (!executor) {
+          throw new TransitionError(
+            `No executor registered for effect tag "${effect.tag}"`
+          );
+        }
+
+        // Get the payload (if any) and convert via rillToJs
+        const payload = effect.args.length > 0 ? rillToJs(effect.args[0]) : undefined;
+
+        // Invoke executor synchronously
+        const result = executor(payload);
+
+        // If async, handle rejection
+        if (result && typeof result === "object" && "then" in result && typeof (result as any).then === "function") {
+          // It's a promise - handle async executor rejection
+          const promise = result as Promise<void>;
+          promise.catch((err: unknown) => {
+            if (config.onExecutorError) {
+              config.onExecutorError(err, effect.tag);
+            } else {
+              // Rethrow on microtask queue
+              Promise.resolve().then(() => {
+                throw err;
+              });
+            }
+          });
+        }
+      }
+
+      return newState;
     },
   };
 }
