@@ -856,6 +856,11 @@ export function createPreludeTypeEnv(): TypeEnv {
     const a = freshTypeVar(), b = freshTypeVar();
     env.set("map_option", scheme(tfn(tfn(a, b), tunion("Option", [a]), tunion("Option", [b]))));
   }
+  // append : List(a) -> List(a) -> List(a)
+  {
+    const a = freshTypeVar();
+    env.set("append", scheme(tfn(tlist(a), tlist(a), tlist(a))));
+  }
 
   return env;
 }

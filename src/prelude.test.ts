@@ -271,4 +271,30 @@ describe("Prelude", () => {
       expect(runPrint("Some(5) |> map_option(fn(x) -> x * 2) |> map_option(fn(x) -> x + 1)")).toBe("Some(11)");
     });
   });
+
+  describe("append", () => {
+    it("appends two non-empty lists", () => {
+      expect(runPrint("append([1, 2], [3, 4])")).toBe("[1, 2, 3, 4]");
+    });
+
+    it("appends to an empty list", () => {
+      expect(runPrint("append([], [1, 2, 3])")).toBe("[1, 2, 3]");
+    });
+
+    it("appends an empty list to a non-empty list", () => {
+      expect(runPrint("append([1, 2], [])")).toBe("[1, 2]");
+    });
+
+    it("appends two empty lists", () => {
+      expect(runPrint("append([], [])")).toBe("[]");
+    });
+
+    it("appends lists with strings", () => {
+      expect(runPrint('append(["a", "b"], ["c"])')).toBe('["a", "b", "c"]');
+    });
+
+    it("works with pipes", () => {
+      expect(runPrint("[3, 4] |> append([1, 2])")).toBe("[1, 2, 3, 4]");
+    });
+  });
 });

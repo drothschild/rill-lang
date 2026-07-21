@@ -502,6 +502,27 @@ describe("Type Inference", () => {
       const rendered = schemeToString(scheme!);
       expect(rendered).toBe("(a -> b) -> Option(a) -> Option(b)");
     });
+
+    it("append renders as List(a) -> List(a) -> List(a)", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      const scheme = env.get("append");
+      expect(scheme).toBeDefined();
+      const rendered = schemeToString(scheme!);
+      expect(rendered).toBe("List(a) -> List(a) -> List(a)");
+    });
+
+    it("append accepts matching list types", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex("append([1, 2], [3, 4])")), env)).not.toThrow();
+    });
+
+    it("append rejects mismatched element types", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex('append([1, 2], ["a", "b"])')), env)).toThrow();
+    });
   });
 
   describe("rules prelude builtins", () => {

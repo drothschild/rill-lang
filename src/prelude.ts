@@ -214,5 +214,11 @@ export function createPrelude(): Map<string, Value> {
     throw new Error("map_option expects an Option");
   }));
 
+  env.set("append", builtin("append", 2, ([a, b]) => {
+    assertList(a);
+    assertList(b);
+    return { kind: "List", elements: [...a.elements, ...b.elements] };
+  }));
+
   return env;
 }
