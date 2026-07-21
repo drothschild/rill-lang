@@ -194,11 +194,13 @@ let add_extra = fn(cfg) -> { cfg | extra: true }  -- works if caller's cfg has e
 A `match` expression is exhaustive when it covers every constructor of its subject's declared type:
 
 ```
+type Shape = Circle({ r: Int }) | Rect({ w: Int, h: Int })
+
 let area = fn(shape) -> match shape {
-  Circle(r) -> r * r * 3,
-  Rect(w, h) -> w * h
+  Circle(c) -> c.r * c.r * 3,
+  Rect(r) -> r.w * r.h
 }
-in area(Rect(3, 4))   -- => 12
+in area(Rect({ w: 3, h: 4 }))   -- => 12
 ```
 
 If a match is not exhaustive, the program fails at load time (the boot gate):
@@ -279,7 +281,9 @@ let state = Resting in state
 ```
 type Phase = Idle | Resting | Working
 
-let state = Resting in state  -- now OK
+let state = Restng in state  -- typo in constructor name
+-- Error at line 3, col 13:
+--   Unknown constructor: Restng (did you mean Resting?)
 ```
 
 This change improves type safety (all state is explicit) and enables exhaustiveness checking, the core safety feature of a state machine language.
@@ -316,7 +320,7 @@ at(2, [10, 20, 30])  -- => Ok(30)
 at(5, [10, 20, 30])  -- => Err("index 5 out of bounds (list has 3 elements)")
 at(-1, [10, 20, 30]) -- => Err("index -1 out of bounds (list has 3 elements)")
 
-[10, 20, 30] |> at(1) |> fn(v) -> v * 2  -- => Ok(40)
+[10, 20, 30] |> at(1)? |> fn(v) -> v * 2  -- => 40
 ```
 
 **Option type** replaces sentinel values like `rpe: -1.0` or `nextPhase: ""`:
@@ -338,7 +342,7 @@ match s2.rpe {
 - `with_default : a -> Option(a) -> a` — unwrap or return a default:
   ```
   with_default(0.0, Some(7.5))  -- => 7.5
-  with_default(0.0, None)       -- => 0.0
+  with_default(1.5, None)       -- => 1.5
   ```
 
 - `map_option : (a -> b) -> Option(a) -> Option(b)` — transform inside an Option:
@@ -569,8 +573,5 @@ Note: at runtime `length` also accepts a `String`, but its type signature is `Li
 
 ## Known Limitations
 
-- No algebraic data type declarations (tags are structural)
 - The CLI runner (`runSource`) type-checks against an empty environment and skips type errors without source locations, so it is more permissive than the embedding API (`infer` with `createPreludeTypeEnv`) — a program that runs at the CLI can still fail an embedder's load-time type check
-- No module system
 - No string interpolation
-- Single-file programs only
