@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 // Import from the BUILT package entry, exactly as a consumer would.
-import { infer, createPreludeTypeEnv, bindType, T, lex, parse } from "../dist/lib.js";
+import { infer, createPreludeTypeEnv, bindType, T, lex, parse, jsToRill, rillToJs, BridgeError, createPreludeDeclEnv } from "../dist/lib.js";
 
 describe("built lib.js checking API", () => {
   it("exports the checking API as callable values", () => {
@@ -19,5 +19,61 @@ describe("built lib.js checking API", () => {
     expect(() => infer(parse(lex("r.a")), env, "r.a")).not.toThrow();
     // Reading an undeclared field off the OPEN record also type-checks (row grows).
     expect(() => infer(parse(lex("r.b")), env, "r.b")).not.toThrow();
+  });
+});
+
+describe("built lib.js bridge API (Phase 5)", () => {
+  it("exports rillToJs and jsToRill as callable functions", () => {
+    expect(typeof rillToJs).toBe("function");
+    expect(typeof jsToRill).toBe("function");
+  });
+
+  it("exports BridgeError as a class", () => {
+    expect(typeof BridgeError).toBe("function");
+    const err = new BridgeError("test");
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  it("converts Rill Int value to JS number via rillToJs", () => {
+    const result = rillToJs({ kind: "Int", value: 42 });
+    expect(result).toBe(42);
+  });
+
+  it("converts JS number to Rill Int via jsToRill with prelude env", () => {
+    const env = createPreludeDeclEnv();
+    const result = jsToRill(42, T.Int, env, "value");
+    expect(result).toEqual({ kind: "Int", value: 42 });
+  });
+
+  it("converts Rill tag value via rillToJs", () => {
+    const result = rillToJs({
+      kind: "Tag",
+      tag: "Ok",
+      args: [{ kind: "Int", value: 42 }],
+    });
+    expect(result).toEqual({ tag: "Ok", value: 42 });
+  });
+
+  it("converts JS tag object to Rill via jsToRill", () => {
+    const env = createPreludeDeclEnv();
+    const result = jsToRill(
+      { tag: "Ok", value: 42 },
+      T.union("Result", [T.Int]),
+      env,
+      "result"
+    );
+    expect(result).toEqual({
+      kind: "Tag",
+      tag: "Ok",
+      args: [{ kind: "Int", value: 42 }],
+    });
+  });
+
+  it("round-trips via rillToJs then jsToRill", () => {
+    const env = createPreludeDeclEnv();
+    const original = { kind: "Int" as const, value: 42 };
+    const js = rillToJs(original);
+    const roundTrip = jsToRill(js, T.Int, env, "x");
+    expect(roundTrip).toEqual(original);
   });
 });

@@ -17,3 +17,8 @@ export { infer, createPreludeTypeEnv, bindType } from './typechecker';
 export type { TypeEnv } from './typechecker';
 export { T } from './types';
 export type { Type } from './types';
+
+// Bridge API for JS↔Rill conversion (Phase 5)
+export { rillToJs, jsToRill, BridgeError } from './bridge';
+export { createPreludeDeclEnv } from './decls';
+export type { DeclEnv } from './decls';
