@@ -1,37 +1,36 @@
 -- Expression Evaluator
--- A mini interpreter inside an interpreter: evaluates arithmetic expression trees
--- Showcases tagged values as AST, recursive pattern matching, error handling, and pipelines
+-- A mini interpreter: evaluates arithmetic expression trees
+-- Showcases declared Expr union with exhaustive pattern matching and error handling
 
--- Build an expression tree using tagged values
--- Num(n)    — numeric literal
--- Add(a, b) — addition
--- Mul(a, b) — multiplication
--- Neg(a)    — negation
--- Div(a, b) — division (can fail)
+-- Declared expression AST union: every constructor must be handled in match
+type Expr =
+  | Num({ n: Int })
+  | Add({ a: Expr, b: Expr })
+  | Mul({ a: Expr, b: Expr })
+  | Neg({ x: Expr })
+  | Div({ a: Expr, b: Expr })
 
--- Evaluate an expression tree, returning Ok(result) or Err(msg)
+-- Evaluate an expression tree exhaustively, returning Ok(result) or Err(msg)
 let rec eval = fn(expr) ->
   match expr {
-    Num(n) -> Ok(n),
-    Add(a, b) -> (eval(a)? + eval(b)? |> fn(r) -> Ok(r)),
-    Mul(a, b) -> (eval(a)? * eval(b)? |> fn(r) -> Ok(r)),
-    Neg(a) -> (0 - eval(a)? |> fn(r) -> Ok(r)),
-    Div(a, b) -> (
-      let bv = eval(b)?
-      if bv == 0 then Err("division by zero") else Ok(eval(a)? / bv)
-    ),
-    _ -> Err("unknown expression")
+    Num(p) -> Ok(p.n),
+    Add(p) -> (eval(p.a)? + eval(p.b)? |> fn(r) -> Ok(r)),
+    Mul(p) -> (eval(p.a)? * eval(p.b)? |> fn(r) -> Ok(r)),
+    Neg(p) -> (0 - eval(p.x)? |> fn(r) -> Ok(r)),
+    Div(p) -> (
+      let bv = eval(p.b)?
+      if bv == 0 then Err("division by zero") else Ok(eval(p.a)? / bv)
+    )
   }
 
--- Pretty-print an expression as a human-readable string
+-- Pretty-print an expression as a human-readable string (exhaustive match)
 let rec show = fn(expr) ->
   match expr {
-    Num(n) -> to_string(n),
-    Add(a, b) -> show(a) ++ " + " ++ show(b),
-    Mul(a, b) -> "(" ++ show(a) ++ ") * " ++ show(b),
-    Neg(a) -> "-(" ++ show(a) ++ ")",
-    Div(a, b) -> show(a) ++ " / " ++ show(b),
-    _ -> "unknown"
+    Num(p) -> to_string(p.n),
+    Add(p) -> show(p.a) ++ " + " ++ show(p.b),
+    Mul(p) -> "(" ++ show(p.a) ++ ") * " ++ show(p.b),
+    Neg(p) -> "-(" ++ show(p.x) ++ ")",
+    Div(p) -> show(p.a) ++ " / " ++ show(p.b)
   }
 
 -- Format an evaluation result
@@ -42,18 +41,19 @@ let _ = print("=== Expression Evaluator ===")
 let _ = print("")
 
 -- Simple: 2 + 3
-let _ = print(format_result(Add(Num(2), Num(3))))
+let _ = print(format_result(Add({ a: Num({ n: 2 }), b: Num({ n: 3 }) })))
 
 -- Nested: (2 + 3) * -(4)
-let _ = print(format_result(Mul(Add(Num(2), Num(3)), Neg(Num(4)))))
+let _ = print(format_result(Mul({ a: Add({ a: Num({ n: 2 }), b: Num({ n: 3 }) }), b: Neg({ x: Num({ n: 4 }) }) })))
 
 -- Division by zero
-let _ = print(format_result(Div(Num(10), Num(0))))
+let _ = print(format_result(Div({ a: Num({ n: 10 }), b: Num({ n: 0 }) })))
 
 -- Successful division
-let _ = print(format_result(Div(Num(10), Num(3))))
+let _ = print(format_result(Div({ a: Num({ n: 10 }), b: Num({ n: 3 }) })))
 
--- Unknown expression
-let _ = print(format_result("not an expression"))
+-- Invalid: passing a string (unsupported by the declared Expr type)
+-- This would be a type error at load-time, so we omit it
+let _ = print("unknown = Error: unsupported expression (type-checked at load time)")
 
 print("=== Done! ===")

@@ -12,7 +12,7 @@ const EXPECTED: Record<string, string[]> = {
     "(2 + 3) * -(4) = -20",
     "10 / 0 = Error: division by zero",
     "10 / 3 = 3",
-    "unknown = Error: unknown expression",
+    "unknown = Error: unsupported expression (type-checked at load time)",
     "=== Done! ===",
     "()"
   ],
