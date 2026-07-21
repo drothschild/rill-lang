@@ -253,7 +253,12 @@ export function instantiateCtor(info: CtorInfo, env: DeclEnv): { unionType: Type
   }
 
   // Substitute params in the payload
-  const payload = info.payload ? substituteAliasParams(info.payload, freshVars) : null;
+  let payload = info.payload ? substituteAliasParams(info.payload, freshVars) : null;
+
+  // Resolve any alias/union references in the payload (without re-resolving TParams)
+  if (payload) {
+    payload = resolveTypeAnn(payload, env, info.typeParams);
+  }
 
   // Create the union type with fresh vars
   const unionType: Type = {

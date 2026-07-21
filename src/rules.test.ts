@@ -450,6 +450,73 @@ describe("rule headers", () => {
         expect(result.ok).toBe(false);
         expect(result.errors.length).toBeGreaterThan(0);
       });
+
+      it("BUG 1: alias references in constructor payload types are resolved", () => {
+        const result = checkRuleSource(`
+          alias A = { n: Int }
+          type E = Mk({ a: A })
+          rule f(e: E) -> Int
+          match e { Mk(p) -> p.a.n }
+        `);
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+      });
+
+      it("BUG 1: List(alias) in constructor payload is resolved", () => {
+        const result = checkRuleSource(`
+          alias Item = { value: Int }
+          type Container = Hold(List(Item))
+          rule f(c: Container) -> Int
+          match c { Hold(items) -> length(items) }
+        `);
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+      });
+
+      it("BUG 1: aliased union member in constructor payload is resolved", () => {
+        const helperSource = `
+          let dummy = 1
+          0
+        `;
+        const resolver = (path: string) => {
+          if (path === "helpers") return helperSource;
+          throw new Error(`Unknown import: ${path}`);
+        };
+        const result = checkRuleSource(
+          `
+          import "helpers" as h
+          alias ItemPayload = { id: Int, name: String }
+          type Item = Create(ItemPayload) | Delete(Int)
+          rule f(item: Item) -> String
+          match item { Create(p) -> p.name, Delete(_) -> "" }
+          `,
+          { resolve: resolver, path: "entry" }
+        );
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+      });
+
+      it("BUG 2: entry with imports AND own declarations does not duplicate", () => {
+        const helperSource = `
+          let f = fn(x) -> x + 1
+          0
+        `;
+        const resolver = (path: string) => {
+          if (path === "helpers") return helperSource;
+          throw new Error(`Unknown import: ${path}`);
+        };
+        const result = checkRuleSource(
+          `
+          import "helpers" as h
+          type P = A | B
+          rule main(p: P) -> Int
+          match p { A -> h.f(1), B -> 0 }
+          `,
+          { resolve: resolver, path: "entry" }
+        );
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+      });
     });
   });
 });

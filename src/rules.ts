@@ -75,23 +75,26 @@ export function checkRuleSource(source: string, options?: CheckRuleOptions): Rul
         const message = e instanceof RillError ? e.message : (e instanceof Error ? e.message : String(e));
         return { ok: false, errors: [message], header };
       }
+      // When imports are present, entry's declarations are already in graphDeclEnv
+      // (via loadModules/buildGraphDeclEnv), so use graphDeclEnv directly
+      declEnv = graphDeclEnv;
+    } else {
+      // No imports: build declaration environment from this file's declarations
+      try {
+        declEnv = buildDeclEnv(program.declarations, graphDeclEnv);
+      } catch (e: unknown) {
+        if (e instanceof RillError) {
+          errors.push(e.message);
+        } else {
+          errors.push(e instanceof Error ? e.message : String(e));
+        }
+        if (errors.length > 0) {
+          return { ok: false, errors, header };
+        }
+      }
     }
 
-    // Build the declaration environment from the file's declarations
-    try {
-      declEnv = buildDeclEnv(program.declarations, graphDeclEnv);
-    } catch (e: unknown) {
-      if (e instanceof RillError) {
-        errors.push(e.message);
-      } else {
-        errors.push(e instanceof Error ? e.message : String(e));
-      }
-      if (errors.length > 0) {
-        return { ok: false, errors, header };
-      }
-    }
-
-    // Use merged declaration environment for resolving header types
+    // Use declaration environment for resolving header types
     const fullDeclEnv = declEnv || graphDeclEnv;
 
     // Build import aliases map for qualified access
