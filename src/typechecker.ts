@@ -340,11 +340,12 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution, declEnv: DeclE
       const retT = freshTypeVar();
       for (const c of expr.cases) {
         const [patT, patBindings, s2] = inferPattern(c.pattern, s, declEnv);
-        // Unify subject with pattern type
+        // Unify subject with pattern type — errors are source-located at the match expression
         try {
           s = unify(applySubst(s2, subjT), patT, s2);
-        } catch {
-          s = s2;
+        } catch (e: any) {
+          const err = e instanceof RillError ? e : new RillError(e.message, expr.span);
+          throw err;
         }
         const matchEnv = new Map(env);
         for (const [k, t] of patBindings) matchEnv.set(k, mono(t));

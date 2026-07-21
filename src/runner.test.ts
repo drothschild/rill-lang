@@ -57,4 +57,19 @@ describe("File Runner", () => {
     `);
     expect(result.error).toBeTruthy();
   });
+
+  it("checks constructor arity at runtime through runSource", () => {
+    const result = runSource(`
+      type Shape = Circle(Float)
+      Circle(1.0)
+    `);
+    expect(result.output).toBe("Circle(1)");
+
+    const resultWrongArity = runSource(`
+      type Shape = Circle(Float)
+      Circle()
+    `);
+    expect(resultWrongArity.error).toBeTruthy();
+    expect(resultWrongArity.error).toMatch(/expects.*arguments/i);
+  });
 });

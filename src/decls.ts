@@ -1,6 +1,7 @@
 import { Type, freshTypeVar } from "./types";
 import { Declaration, TypeDecl, AliasDecl } from "./ast";
 import { RillError } from "./errors";
+import { Span } from "./span";
 
 export interface CtorInfo {
   union: string;
@@ -46,8 +47,9 @@ export function buildDeclEnv(decls: Declaration[], base?: DeclEnv): DeclEnv {
       const ctors: string[] = [];
       for (const ctor of decl.constructors) {
         if (env.ctors.has(ctor.name)) {
+          const previousUnion = env.ctors.get(ctor.name)!.union;
           throw new RillError(
-            `Constructor ${ctor.name} already defined in another type`,
+            `Constructor ${ctor.name} defined in both ${decl.name} and ${previousUnion}`,
             ctor.span
           );
         }
@@ -85,13 +87,13 @@ export function buildDeclEnv(decls: Declaration[], base?: DeclEnv): DeclEnv {
 // union names validate arity; unknown capitalized names throw a RillError with
 // a did-you-mean suggestion. TParam nodes are only legal while resolving a
 // declaration's own annotations (pass the active param list; elsewhere they error).
-export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[]): Type {
+export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[], span?: Span): Type {
   switch (t.kind) {
     case "TParam": {
       if (!activeParams || !activeParams.includes(t.name)) {
         throw new RillError(
           `Type parameter ${t.name} not in scope`,
-          undefined
+          span
         );
       }
       return t;
@@ -103,7 +105,7 @@ export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[]): 
         if (t.args.length !== aliasInfo.params.length) {
           throw new RillError(
             `Alias ${t.name} expects ${aliasInfo.params.length} arguments, got ${t.args.length}`,
-            undefined
+            span
           );
         }
         // Substitute params and recursively resolve
@@ -112,7 +114,7 @@ export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[]): 
           substitution.set(aliasInfo.params[i], t.args[i]);
         }
         const expandedType = substituteAliasParams(aliasInfo.type, substitution);
-        return resolveTypeAnn(expandedType, env, activeParams);
+        return resolveTypeAnn(expandedType, env, activeParams, span);
       }
 
       // Check if it's a union
@@ -121,14 +123,14 @@ export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[]): 
         if (t.args.length !== unionInfo.params.length) {
           throw new RillError(
             `Union ${t.name} expects ${unionInfo.params.length} arguments, got ${t.args.length}`,
-            undefined
+            span
           );
         }
         // Recursively resolve args
         return {
           kind: "TUnion",
           name: t.name,
-          args: t.args.map(arg => resolveTypeAnn(arg, env, activeParams)),
+          args: t.args.map(arg => resolveTypeAnn(arg, env, activeParams, span)),
         };
       }
 
@@ -140,7 +142,7 @@ export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[]): 
       const suggestionText = suggestion ? ` (did you mean ${suggestion}?)` : "";
       throw new RillError(
         `Unknown type ${t.name}${suggestionText}`,
-        undefined
+        span
       );
     }
     case "TRecord": {
@@ -149,32 +151,42 @@ export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[]): 
         fields: new Map(
           [...t.fields.entries()].map(([k, v]) => [
             k,
-            resolveTypeAnn(v, env, activeParams),
+            resolveTypeAnn(v, env, activeParams, span),
           ])
         ),
-        rest: t.rest ? resolveTypeAnn(t.rest, env, activeParams) : null,
+        rest: t.rest ? resolveTypeAnn(t.rest, env, activeParams, span) : null,
       };
     }
     case "TList": {
       return {
         kind: "TList",
-        element: resolveTypeAnn(t.element, env, activeParams),
+        element: resolveTypeAnn(t.element, env, activeParams, span),
       };
     }
     case "TTuple": {
       return {
         kind: "TTuple",
-        elements: t.elements.map(el => resolveTypeAnn(el, env, activeParams)),
+        elements: t.elements.map(el => resolveTypeAnn(el, env, activeParams, span)),
       };
     }
     case "TFn": {
       return {
         kind: "TFn",
-        param: resolveTypeAnn(t.param, env, activeParams),
-        ret: resolveTypeAnn(t.ret, env, activeParams),
+        param: resolveTypeAnn(t.param, env, activeParams, span),
+        ret: resolveTypeAnn(t.ret, env, activeParams, span),
       };
     }
-    case "TCon":
+    case "TCon": {
+      // Validate lowercase type names
+      if (t.name[0].toLowerCase() === t.name[0] &&
+          !["int", "float", "string", "bool", "unit", "list"].includes(t.name)) {
+        throw new RillError(
+          `Unknown type ${t.name}`,
+          span
+        );
+      }
+      return t;
+    }
     case "TVar":
       return t;
   }

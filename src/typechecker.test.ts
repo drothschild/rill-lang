@@ -633,6 +633,13 @@ describe("Task 9: Match-subject unification for TagPat", () => {
     expect(() => typeOfProgram(source)).toThrow();
   });
 
+  it("rejects known constructor from different union in pattern (cross-union mismatch)", () => {
+    const source = `type Shape = Circle(Float)
+      type Color = Red | Blue
+      match Circle(1.0) { Red -> 0.0, _ -> 1.0 }`;
+    expect(() => typeOfProgram(source)).toThrow();
+  });
+
   it("rejects unknown constructor in pattern with did-you-mean", () => {
     const source = `type Shape = Circle(Float)
       match Circle(1.0) { Circl(x) -> x, _ -> 0.0 }`;

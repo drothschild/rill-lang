@@ -78,7 +78,7 @@ describe("Declaration Environment", () => {
         1
       `;
       const ast = parseProgram(lex(source));
-      expect(() => buildDeclEnv(ast.declarations)).toThrow();
+      expect(() => buildDeclEnv(ast.declarations)).toThrow(/X.*A.*B|X.*B.*A/);
     });
 
     it("rejects duplicate type name", () => {
@@ -154,6 +154,18 @@ describe("Declaration Environment", () => {
 
       const paramType: Type = { kind: "TParam", name: "b" };
       expect(() => resolveTypeAnn(paramType, env, ["a"])).toThrow();
+    });
+
+    it("rejects unknown lowercase type names", () => {
+      const source = `
+        type Phase = Idle | Working
+        1
+      `;
+      const ast = parseProgram(lex(source));
+      const env = buildDeclEnv(ast.declarations);
+
+      const unknownType: Type = { kind: "TCon", name: "unknownType" };
+      expect(() => resolveTypeAnn(unknownType, env)).toThrow();
     });
   });
 

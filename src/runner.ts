@@ -1,6 +1,6 @@
 import { lex } from "./lexer";
 import { parseProgram } from "./parser";
-import { evaluate } from "./evaluator";
+import { evaluate, evaluateProgram } from "./evaluator";
 import { infer, createPreludeTypeEnv, bindType } from "./typechecker";
 import { prettyPrint } from "./values";
 import { resetTypeVarCounter } from "./types";
@@ -75,7 +75,7 @@ export function runSource(source: string): RunResult {
 
     // Evaluate (header params are unbound at the CLI — the embedding host injects them)
     const env = createPrelude();
-    const result = evaluate(program.body, env);
+    const result = evaluateProgram(program, env);
     return { output: prettyPrint(result) };
   } catch (e: any) {
     return { error: e.message };

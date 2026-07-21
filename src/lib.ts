@@ -1,5 +1,5 @@
 // Library API exports for embedding Rill as a rule engine
-export { evaluate } from './evaluator';
+export { evaluate, evaluateProgram } from './evaluator';
 export { createPrelude } from './prelude';
 export { lex } from './lexer';
 export { parse, parseProgram } from './parser';
