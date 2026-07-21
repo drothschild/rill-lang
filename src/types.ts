@@ -5,8 +5,6 @@ export type Type =
   | { kind: "TList"; element: Type }
   | { kind: "TTuple"; elements: Type[] }
   | { kind: "TRecord"; fields: Map<string, Type>; rest: Type | null }
-  | { kind: "TResult"; ok: Type }
-  | { kind: "TTag"; tag: string; args: Type[] }
   | { kind: "TUnion"; name: string; args: Type[] }
   | { kind: "TParam"; name: string };
 
@@ -33,8 +31,6 @@ export function prettyType(t: Type): string {
       const fields = [...t.fields.entries()].map(([k, v]) => `${k}: ${prettyType(v)}`).join(", ");
       return t.rest ? `{ ${fields} | ${prettyType(t.rest)} }` : `{ ${fields} }`;
     }
-    case "TResult": return `Result(${prettyType(t.ok)}, String)`;
-    case "TTag": return t.args.length === 0 ? t.tag : `${t.tag}(${t.args.map(prettyType).join(", ")})`;
     case "TUnion": return t.args.length === 0 ? t.name : `${t.name}(${t.args.map(prettyType).join(", ")})`;
     case "TParam": return t.name;
   }

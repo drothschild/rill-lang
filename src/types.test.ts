@@ -50,14 +50,6 @@ describe("Types", () => {
     expect(prettyType(t)).toBe("{ name: String }");
   });
 
-  it("represents Result types", () => {
-    const t: Type = {
-      kind: "TResult",
-      ok: { kind: "TCon", name: "Int" },
-    };
-    expect(prettyType(t)).toBe("Result(Int, String)");
-  });
-
   it("represents union types without arguments", () => {
     const t: Type = { kind: "TUnion", name: "Phase", args: [] };
     expect(prettyType(t)).toBe("Phase");

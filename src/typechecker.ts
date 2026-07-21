@@ -30,8 +30,6 @@ function freeVars(t: Type): Set<number> {
       if (t.rest) s = union(s, freeVars(t.rest));
       return s;
     }
-    case "TResult": return freeVars(t.ok);
-    case "TTag": return t.args.reduce((s, a) => union(s, freeVars(a)), new Set<number>());
     case "TUnion": return t.args.reduce((s, a) => union(s, freeVars(a)), new Set<number>());
     case "TParam": return new Set();
   }
@@ -86,8 +84,6 @@ function substituteVars(mapping: Map<number, Type>, t: Type): Type {
       fields: new Map([...t.fields.entries()].map(([k, v]) => [k, substituteVars(mapping, v)])),
       rest: t.rest ? substituteVars(mapping, t.rest) : null,
     };
-    case "TResult": return { kind: "TResult", ok: substituteVars(mapping, t.ok) };
-    case "TTag": return { kind: "TTag", tag: t.tag, args: t.args.map(a => substituteVars(mapping, a)) };
     case "TUnion": return { kind: "TUnion", name: t.name, args: t.args.map(a => substituteVars(mapping, a)) };
     case "TParam": return t;
   }
@@ -401,8 +397,6 @@ function containsFnType(t: Type): boolean {
       for (const v of t.fields.values()) if (containsFnType(v)) return true;
       return t.rest ? containsFnType(t.rest) : false;
     }
-    case "TResult": return containsFnType(t.ok);
-    case "TTag": return t.args.some(containsFnType);
     case "TUnion": return t.args.some(containsFnType);
   }
 }
@@ -549,7 +543,7 @@ export function createPreludeTypeEnv(): TypeEnv {
   const tcon = (name: string): Type => ({ kind: "TCon", name });
   const tlist = (element: Type): Type => ({ kind: "TList", element });
   const ttuple = (...elements: Type[]): Type => ({ kind: "TTuple", elements });
-  const tresult = (ok: Type): Type => ({ kind: "TResult", ok });
+  const tunion = (name: string, args: Type[] = []): Type => ({ kind: "TUnion", name, args });
   // Curried arrow: tfn(A, B, C) === A -> B -> C
   const tfn = (...ts: Type[]): Type =>
     ts.reduceRight((ret, param) => ({ kind: "TFn", param, ret }));
@@ -591,12 +585,12 @@ export function createPreludeTypeEnv(): TypeEnv {
   // head : List(a) -> Result(a)
   {
     const a = freshTypeVar();
-    env.set("head", scheme(tfn(tlist(a), tresult(a))));
+    env.set("head", scheme(tfn(tlist(a), tunion("Result", [a]))));
   }
   // tail : List(a) -> Result(List(a))
   {
     const a = freshTypeVar();
-    env.set("tail", scheme(tfn(tlist(a), tresult(tlist(a)))));
+    env.set("tail", scheme(tfn(tlist(a), tunion("Result", [tlist(a)]))));
   }
   // concat : String -> String -> String
   env.set("concat", scheme(tfn(Str, Str, Str)));
@@ -628,10 +622,10 @@ export function createPreludeTypeEnv(): TypeEnv {
   // lookup : k -> List((k, v)) -> Result(v)
   {
     const k = freshTypeVar(), v = freshTypeVar();
-    env.set("lookup", scheme(tfn(k, tlist(ttuple(k, v)), tresult(v))));
+    env.set("lookup", scheme(tfn(k, tlist(ttuple(k, v)), tunion("Result", [v]))));
   }
   // require : Bool -> String -> Result(Unit)
-  env.set("require", scheme(tfn(Bool, Str, tresult(Unit))));
+  env.set("require", scheme(tfn(Bool, Str, tunion("Result", [Unit]))));
 
   return env;
 }

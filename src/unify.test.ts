@@ -287,48 +287,6 @@ describe("Row unification", () => {
   });
 });
 
-describe("Tag unification", () => {
-  beforeEach(() => resetTypeVarCounter());
-
-  it("occurs check catches a tag wrapping its own type variable", () => {
-    const a = freshTypeVar();
-    expect(() => unify(a, { kind: "TTag", tag: "Some", args: [a] })).toThrow(/infinite type/);
-  });
-
-  it("unifies identical tags pointwise", () => {
-    const a = freshTypeVar() as { kind: "TVar"; id: number };
-    const subst = unify(
-      { kind: "TTag", tag: "Some", args: [a] },
-      { kind: "TTag", tag: "Some", args: [{ kind: "TCon", name: "Int" }] },
-    );
-    expect(applySubst(subst, a)).toEqual({ kind: "TCon", name: "Int" });
-  });
-
-  it("unifies identical nullary tags", () => {
-    const subst = unify(
-      { kind: "TTag", tag: "None", args: [] },
-      { kind: "TTag", tag: "None", args: [] },
-    );
-    expect(subst.size).toBe(0);
-  });
-
-  it("fails on different tags with a message naming both", () => {
-    const t1: Type = { kind: "TTag", tag: "Some", args: [{ kind: "TCon", name: "Int" }] };
-    const t2: Type = { kind: "TTag", tag: "None", args: [] };
-    expect(() => unify(t1, t2)).toThrow(/tag Some.*tag None/);
-  });
-
-  it("fails on the same tag with different arity", () => {
-    const t1: Type = { kind: "TTag", tag: "Pair", args: [{ kind: "TCon", name: "Int" }] };
-    const t2: Type = {
-      kind: "TTag",
-      tag: "Pair",
-      args: [{ kind: "TCon", name: "Int" }, { kind: "TCon", name: "Int" }],
-    };
-    expect(() => unify(t1, t2)).toThrow(/arity/);
-  });
-});
-
 describe("Union unification", () => {
   beforeEach(() => resetTypeVarCounter());
 

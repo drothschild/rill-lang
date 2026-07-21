@@ -174,8 +174,6 @@ export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[]): 
         ret: resolveTypeAnn(t.ret, env, activeParams),
       };
     }
-    case "TResult":
-    case "TTag":
     case "TCon":
     case "TVar":
       return t;
@@ -222,8 +220,6 @@ function substituteAliasParams(t: Type, subst: Map<string, Type>): Type {
       };
     case "TCon":
     case "TVar":
-    case "TTag":
-    case "TResult":
       return t;
   }
 }

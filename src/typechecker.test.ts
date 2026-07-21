@@ -284,18 +284,21 @@ describe("Type Inference", () => {
           const elemStr = typeToString(t.element, varNames);
           return `List(${elemStr})`;
         }
-        case "TResult": {
-          const okStr = typeToString(t.ok, varNames);
-          return `Result(${okStr})`;
-        }
         case "TTuple": {
           const elemStrs = t.elements.map(e => typeToString(e, varNames));
           return `(${elemStrs.join(", ")})`;
         }
         case "TRecord":
           return "[Record]"; // Simplified for prelude tests
-        case "TTag":
-          return `[Tag: ${t.tag}]`; // Simplified for prelude tests
+        case "TUnion": {
+          if (t.args.length === 0) {
+            return t.name;
+          }
+          const argStrs = t.args.map(a => typeToString(a, varNames));
+          return `${t.name}(${argStrs.join(", ")})`;
+        }
+        case "TParam":
+          return t.name;
       }
     }
 
@@ -541,15 +544,17 @@ describe("record and tag unification regressions", () => {
   });
 
   it("typechecks the same custom tag across match branches", () => {
-    expect(typeOf("match true { true -> Some(1), _ -> Some(2) }")).toBe("Some(Int)");
+    expect(typeOf("match true { true -> Some(1), _ -> Some(2) }")).toBe("Option(Int)");
   });
 
   it("typechecks identical nullary custom tags across match branches", () => {
-    expect(typeOf("match true { true -> None, _ -> None }")).toBe("None");
+    expect(typeOf("match true { true -> None, _ -> None }")).toBe("Option(d)");
   });
 
-  it("rejects different custom tags across branches with a message naming both tags", () => {
-    expect(() => typeOf("match true { true -> Some(1), _ -> None }")).toThrow(/tag Some.*tag None/);
+  it("matches constructors from same declared union across branches", () => {
+    const source = `type Choice = Yes(Int) | No
+      match true { true -> Yes(1), _ -> No }`;
+    expect(typeOfProgram(source)).toBe("Choice");
   });
 
   it("reports an infinite type instead of overflowing when a variable is unified with a tag wrapping it", () => {
