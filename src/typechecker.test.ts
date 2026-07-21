@@ -606,3 +606,36 @@ describe("Task 8: Constructor inference for declared unions", () => {
     expect(typeOf("match Some(1) { Some(x) -> x, None -> 0 }")).toBe("Int");
   });
 });
+
+describe("Task 9: Match-subject unification for TagPat", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("matches declared union with Some/None patterns", () => {
+    const source = `type Choice(a) = Yes(a) | No
+      match Yes(5) { Yes(x) -> x, No -> 0 }`;
+    expect(typeOfProgram(source)).toBe("Int");
+  });
+
+  it("binds payload variable with instantiated type in match arm", () => {
+    const source = `type Event = LogSet({ reps: Int })
+      match LogSet({reps: 5}) { LogSet(p) -> p.reps, _ -> 0 }`;
+    expect(typeOfProgram(source)).toBe("Int");
+  });
+
+  it("rejects constructor not in subject union type", () => {
+    const source = `type Shape = Circle(Float)
+      match Circle(1.0) { Square(x) -> x, _ -> 0.0 }`;
+    expect(() => typeOfProgram(source)).toThrow();
+  });
+
+  it("rejects unknown constructor in pattern with did-you-mean", () => {
+    const source = `type Shape = Circle(Float)
+      match Circle(1.0) { Circl(x) -> x, _ -> 0.0 }`;
+    expect(() => typeOfProgram(source)).toThrow(/Unknown constructor/);
+  });
+
+  it("prelude Option patterns work in match", () => {
+    const source = `match Some(1.0) { Some(v) -> v, None -> 0.0 }`;
+    expect(typeOf(source)).toBe("Float");
+  });
+});

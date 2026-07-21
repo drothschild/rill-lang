@@ -342,15 +342,11 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution, declEnv: DeclE
       const retT = freshTypeVar();
       for (const c of expr.cases) {
         const [patT, patBindings, s2] = inferPattern(c.pattern, s, declEnv);
-        // Skip subject-pattern unification for tag patterns (no sum types in v1)
-        if (patT.kind === "TTag") {
+        // Unify subject with pattern type
+        try {
+          s = unify(applySubst(s2, subjT), patT, s2);
+        } catch {
           s = s2;
-        } else {
-          try {
-            s = unify(applySubst(s2, subjT), patT, s2);
-          } catch {
-            s = s2;
-          }
         }
         const matchEnv = new Map(env);
         for (const [k, t] of patBindings) matchEnv.set(k, mono(t));
@@ -485,22 +481,37 @@ function inferPattern(pattern: import("./ast").Pattern, subst: Substitution, dec
       return [t, new Map([[pattern.name, t]]), subst];
     }
     case "TagPat": {
+      // Look up constructor in declEnv
+      const ctorInfo = declEnv.ctors.get(pattern.tag);
+      if (!ctorInfo) {
+        // Unknown constructor - error with did-you-mean
+        const suggestion = suggestName(pattern.tag, declEnv.ctors.keys());
+        const suggestionText = suggestion ? ` (did you mean ${suggestion}?)` : "";
+        throw new TypeError(`Unknown constructor in pattern: ${pattern.tag}${suggestionText}`);
+      }
+
+      // Instantiate the constructor
+      const { unionType, payload } = instantiateCtor(ctorInfo, declEnv);
+
+      // Check arity
+      const expectedArity = payload === null ? 0 : 1;
+      if (pattern.args.length !== expectedArity) {
+        throw new TypeError(
+          `Constructor ${pattern.tag} expects ${expectedArity} arguments, got ${pattern.args.length}`
+        );
+      }
+
+      // Infer pattern args and bind variables
       let s = subst;
-      const argTypes: Type[] = [];
       const bindings = new Map<string, Type>();
-      for (const arg of pattern.args) {
-        const [t, b, si] = inferPattern(arg, s, declEnv);
-        argTypes.push(t);
-        for (const [k, v] of b) bindings.set(k, v);
-        s = si;
+      if (pattern.args.length === 1 && payload !== null) {
+        // Infer the single argument pattern against the instantiated payload
+        const [argPatT, argBindings, si] = inferPattern(pattern.args[0], s, declEnv);
+        s = unify(argPatT, payload, si);
+        for (const [k, v] of argBindings) bindings.set(k, v);
       }
-      if (pattern.tag === "Ok" && argTypes.length === 1) {
-        return [{ kind: "TResult", ok: argTypes[0] }, bindings, s];
-      }
-      if (pattern.tag === "Err" && argTypes.length === 1) {
-        return [{ kind: "TResult", ok: freshTypeVar() }, bindings, s];
-      }
-      return [{ kind: "TTag", tag: pattern.tag, args: argTypes }, bindings, s];
+
+      return [unionType, bindings, s];
     }
     case "TuplePat": {
       let s = subst;
