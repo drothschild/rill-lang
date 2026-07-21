@@ -699,7 +699,17 @@ describe("Task 4: Coverage checker for union subjects", () => {
   it("rejects match missing a union constructor", () => {
     const source = `type Event = StartSession({ nowMs: Int }) | PauseSession | RestElapsed({ nowMs: Int })
       match StartSession({ nowMs: 1 }) { StartSession(p) -> p.nowMs }`;
-    expect(() => typeOfProgram(source)).toThrow();
+    let error: Error | undefined;
+    try {
+      typeOfProgram(source);
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error).toBeDefined();
+    expect(error!.message).toMatch(/missing/i);
+    expect(error!.message).toMatch(/PauseSession/);
+    expect(error!.message).toMatch(/RestElapsed\(_\)/);
+    expect(error!.message).toMatch(/line/i);
   });
 
   it("match with all constructors checks ok", () => {
@@ -737,12 +747,28 @@ describe("Task 4: Coverage checker for union subjects", () => {
         PauseSession -> 2,
         RestElapsed -> 3
       }`;
-    expect(() => typeOfProgram(source)).toThrow(/missing.*StartSession/i);
+    let error: Error | undefined;
+    try {
+      typeOfProgram(source);
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error).toBeDefined();
+    expect(error!.message).toMatch(/missing/i);
+    expect(error!.message).toMatch(/StartSession/);
   });
 
   it("Option(Int) missing None fails exhaustiveness", () => {
-    const source = `match Some(1) { Some(x) -> x, _ -> 0 }`;
-    expect(() => typeOf(source)).not.toThrow();
+    const source = `match Some(1) { Some(x) -> x }`;
+    let error: Error | undefined;
+    try {
+      typeOf(source);
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error).toBeDefined();
+    expect(error!.message).toMatch(/missing/i);
+    expect(error!.message).toMatch(/None/);
   });
 
   it("conservative rule: refutable single pattern does not cover", () => {
@@ -750,7 +776,15 @@ describe("Task 4: Coverage checker for union subjects", () => {
       match Code(1) {
         Code(1) -> "one"
       }`;
-    expect(() => typeOfProgram(source)).toThrow(/missing.*Code/i);
+    let error: Error | undefined;
+    try {
+      typeOfProgram(source);
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error).toBeDefined();
+    expect(error!.message).toMatch(/missing/i);
+    expect(error!.message).toMatch(/Code\(_\)/);
   });
 
   it("conservative nested-refutable rule: joint coverage fails", () => {
@@ -759,7 +793,15 @@ describe("Task 4: Coverage checker for union subjects", () => {
         W(Some(x)) -> x,
         W(None) -> 0
       }`;
-    expect(() => typeOfProgram(source)).toThrow(/missing.*W/i);
+    let error: Error | undefined;
+    try {
+      typeOfProgram(source);
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error).toBeDefined();
+    expect(error!.message).toMatch(/missing/i);
+    expect(error!.message).toMatch(/W\(_\)/);
   });
 
   it("conservative rule: unguarded irrefutable payload covers", () => {

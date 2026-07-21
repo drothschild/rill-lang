@@ -562,9 +562,9 @@ function checkExhaustiveness(
         const ctorInfo = declEnv.ctors.get(c);
         const needsPayload = ctorInfo && ctorInfo.payload !== null;
         return needsPayload ? `${c}(_)` : c;
-      }).join(", ");
+      });
       throw typeError(
-        `This match does not cover all possible values of ${subjectType.name}.\nMissing patterns: ${missing.map(m => `  - ${m}`).join("\n")}`,
+        `This match does not cover all possible values of ${subjectType.name}.\nMissing patterns:\n${missingText.map(m => `  - ${m}`).join("\n")}`,
         span
       );
     }

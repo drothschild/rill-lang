@@ -830,7 +830,16 @@ function checkNoTryInGuard(expr: Expr): void {
       checkNoTryInGuard(expr.fallback);
       break;
     // Leaf nodes: IntLit, FloatLit, StringLit, BoolLit, UnitLit, Ident
-    default:
+    case "IntLit":
+    case "FloatLit":
+    case "StringLit":
+    case "BoolLit":
+    case "UnitLit":
+    case "Ident":
       break;
+    default:
+      // This will cause a TypeScript compile error if a new Expr kind is added
+      const _exhaustivenessCheck: never = expr;
+      throw new Error(`Unhandled Expr kind in checkNoTryInGuard: ${_exhaustivenessCheck}`);
   }
 }
