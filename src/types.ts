@@ -41,6 +41,7 @@ export function prettyType(t: Type): string {
 export const T = {
   String: { kind: "TCon", name: "String" } as Type,
   Int: { kind: "TCon", name: "Int" } as Type,
+  Float: { kind: "TCon", name: "Float" } as Type,
   Bool: { kind: "TCon", name: "Bool" } as Type,
   Unit: { kind: "TCon", name: "Unit" } as Type,
   list(element: Type): Type {
