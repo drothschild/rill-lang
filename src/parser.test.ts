@@ -701,4 +701,52 @@ describe("Parser", () => {
       expect(prog.body).toMatchObject({ kind: "Ident", name: "x" });
     });
   });
+
+  describe("type annotations - named types", () => {
+    function parseType(source: string) {
+      const tokens = lex(`rule f(x: ${source}) -> Int\n42`);
+      const prog = parseProgram(tokens);
+      return (prog.header?.params[0] as any).type;
+    }
+
+    it("parses Result as a TUnion reference instead of TResult", () => {
+      const type = parseType("Result({ ok: Bool })");
+      expect(type).toMatchObject({
+        kind: "TUnion",
+        name: "Result",
+      });
+      expect(type.args).toHaveLength(1);
+      expect(type.args[0]).toMatchObject({ kind: "TRecord" });
+    });
+
+    it("parses named types without arguments", () => {
+      const type = parseType("Phase");
+      expect(type).toMatchObject({
+        kind: "TUnion",
+        name: "Phase",
+        args: [],
+      });
+    });
+
+    it("parses named types with type arguments", () => {
+      const type = parseType("Option(Float)");
+      expect(type).toMatchObject({
+        kind: "TUnion",
+        name: "Option",
+      });
+      expect(type.args).toHaveLength(1);
+      expect(type.args[0]).toMatchObject({ kind: "TCon", name: "Float" });
+    });
+
+    it("keeps existing primitive types unchanged", () => {
+      const intType = parseType("Int");
+      expect(intType).toMatchObject({ kind: "TCon", name: "Int" });
+
+      const listType = parseType("List(String)");
+      expect(listType).toMatchObject({
+        kind: "TList",
+        element: { kind: "TCon", name: "String" },
+      });
+    });
+  });
 });

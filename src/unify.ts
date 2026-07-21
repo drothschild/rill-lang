@@ -140,5 +140,6 @@ export function applySubst(subst: Substitution, t: Type): Type {
     };
     case "TResult": return { kind: "TResult", ok: applySubst(subst, t.ok) };
     case "TTag": return { kind: "TTag", tag: t.tag, args: t.args.map((a) => applySubst(subst, a)) };
+    case "TUnion": return { kind: "TUnion", name: t.name, args: t.args.map((a) => applySubst(subst, a)) };
   }
 }

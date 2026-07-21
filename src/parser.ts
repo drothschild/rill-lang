@@ -457,18 +457,29 @@ class Parser {
             return { kind: "TCon", name: token.lexeme };
           case "List": {
             this.expect(TokenKind.LParen);
-            const element = this.parseTypeAnn();
+            const element = this.parseTypeAnn(activeParams);
             this.expect(TokenKind.RParen);
             return { kind: "TList", element };
           }
-          case "Result": {
-            this.expect(TokenKind.LParen);
-            const ok = this.parseTypeAnn();
-            this.expect(TokenKind.RParen);
-            return { kind: "TResult", ok };
+          default: {
+            // Parse named type references (unions or aliases) with optional type arguments
+            const name = token.lexeme;
+            const args: Type[] = [];
+
+            if (this.at(TokenKind.LParen)) {
+              this.advance(); // consume (
+              if (!this.at(TokenKind.RParen)) {
+                args.push(this.parseTypeAnn(activeParams));
+                while (this.eat(TokenKind.Comma)) {
+                  if (this.at(TokenKind.RParen)) break;
+                  args.push(this.parseTypeAnn(activeParams));
+                }
+              }
+              this.expect(TokenKind.RParen);
+            }
+
+            return { kind: "TUnion", name, args };
           }
-          default:
-            throw new Error(`Unknown type name '${token.lexeme}' at line ${token.span.start.line}, col ${token.span.start.col} (expected Int, Float, String, Bool, Unit, List(..), Result(..), a record type, or a tuple type)`);
         }
       }
       // Record type: { field: Type, .. } — trailing `..` marks an open row
@@ -484,7 +495,7 @@ class Parser {
           }
           const fieldName = this.expect(TokenKind.Ident).lexeme;
           this.expect(TokenKind.Colon);
-          fields.set(fieldName, this.parseTypeAnn());
+          fields.set(fieldName, this.parseTypeAnn(activeParams));
           if (!this.eat(TokenKind.Comma)) break;
         }
         this.expect(TokenKind.RBrace);
@@ -493,11 +504,11 @@ class Parser {
       // Tuple type: (A, B, ...) — single parens are grouping
       case TokenKind.LParen: {
         this.advance();
-        const first = this.parseTypeAnn();
+        const first = this.parseTypeAnn(activeParams);
         if (this.eat(TokenKind.Comma)) {
-          const elements: Type[] = [first, this.parseTypeAnn()];
+          const elements: Type[] = [first, this.parseTypeAnn(activeParams)];
           while (this.eat(TokenKind.Comma)) {
-            elements.push(this.parseTypeAnn());
+            elements.push(this.parseTypeAnn(activeParams));
           }
           this.expect(TokenKind.RParen);
           return { kind: "TTuple", elements };

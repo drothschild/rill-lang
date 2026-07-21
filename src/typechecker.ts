@@ -31,6 +31,7 @@ function freeVars(t: Type): Set<number> {
     }
     case "TResult": return freeVars(t.ok);
     case "TTag": return t.args.reduce((s, a) => union(s, freeVars(a)), new Set<number>());
+    case "TUnion": return t.args.reduce((s, a) => union(s, freeVars(a)), new Set<number>());
   }
 }
 
@@ -85,6 +86,7 @@ function substituteVars(mapping: Map<number, Type>, t: Type): Type {
     };
     case "TResult": return { kind: "TResult", ok: substituteVars(mapping, t.ok) };
     case "TTag": return { kind: "TTag", tag: t.tag, args: t.args.map(a => substituteVars(mapping, a)) };
+    case "TUnion": return { kind: "TUnion", name: t.name, args: t.args.map(a => substituteVars(mapping, a)) };
   }
 }
 
@@ -376,6 +378,7 @@ function containsFnType(t: Type): boolean {
     }
     case "TResult": return containsFnType(t.ok);
     case "TTag": return t.args.some(containsFnType);
+    case "TUnion": return t.args.some(containsFnType);
   }
 }
 
