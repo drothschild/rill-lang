@@ -394,23 +394,23 @@ class Parser {
     const constructors: ConstructorDef[] = [];
     this.eat(TokenKind.Bar); // optional leading |
 
-    constructors.push(this.parseConstructor());
+    constructors.push(this.parseConstructor(params));
     while (this.eat(TokenKind.Bar)) {
-      constructors.push(this.parseConstructor());
+      constructors.push(this.parseConstructor(params));
     }
 
     const span = this.spanFrom(startToken.span);
     return { kind: "TypeDecl", name, params, constructors, span };
   }
 
-  parseConstructor(): ConstructorDef {
+  parseConstructor(activeParams?: string[]): ConstructorDef {
     const token = this.expect(TokenKind.UpperIdent);
     const name = token.lexeme;
     let payload: Type | null = null;
 
     if (this.at(TokenKind.LParen)) {
       this.advance(); // consume (
-      payload = this.parseTypeAnn();
+      payload = this.parseTypeAnn(activeParams);
       this.expect(TokenKind.RParen);
     }
 
@@ -435,7 +435,7 @@ class Parser {
     }
 
     this.expect(TokenKind.Eq);
-    const type = this.parseTypeAnn();
+    const type = this.parseTypeAnn(params);
 
     const span = this.spanFrom(startToken.span);
     return { kind: "AliasDecl", name, params, type, span };
@@ -445,9 +445,12 @@ class Parser {
     const token = this.peek();
     switch (token.kind) {
       case TokenKind.Ident: {
-        // Type parameter placeholder (will be replaced with TParam in Task 5)
-        // For now, just use the identifier name
         const name = this.advance().lexeme;
+        // Check if this identifier is a type parameter in scope
+        if (activeParams && activeParams.includes(name)) {
+          return { kind: "TParam", name };
+        }
+        // Otherwise treat as a type constructor
         return { kind: "TCon", name };
       }
       case TokenKind.UpperIdent: {
