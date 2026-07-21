@@ -1,12 +1,21 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { infer, createPreludeTypeEnv, bindType } from "./typechecker";
-import { parse } from "./parser";
+import { parse, parseProgram } from "./parser";
 import { lex } from "./lexer";
 import { prettyType, resetTypeVarCounter, Type, T } from "./types";
+import { buildDeclEnv, createPreludeDeclEnv } from "./decls";
 
 function typeOf(source: string): string {
   resetTypeVarCounter();
   const type = infer(parse(lex(source)));
+  return prettyType(type);
+}
+
+function typeOfProgram(source: string): string {
+  resetTypeVarCounter();
+  const program = parseProgram(lex(source));
+  const declEnv = buildDeclEnv(program.declarations, createPreludeDeclEnv());
+  const type = infer(program.body, undefined, source, declEnv);
   return prettyType(type);
 }
 
@@ -82,8 +91,84 @@ describe("Type Inference", () => {
       expect(typeOf('let r = { name: "Alice" } in r.name')).toBe("String");
     });
 
+    it("infers record update type — same as base", () => {
+      const t = typeOf('let s = { phase: true, setIndex: 0 } in { s | phase: false }');
+      expect(t).toContain("phase: Bool");
+      expect(t).toContain("setIndex: Int");
+    });
+
+    it("infers record update preserves row polymorphism in helpers", () => {
+      const t = typeOf('fn(s) -> { s | n: 0 }');
+      // Result should be a function type, and the return type should show an open row (with |)
+      expect(t).toMatch(/-> {.*\|/);
+    });
+
+    it("AC2.2 open-base scope pin: open-base fn grows row, call site with closed record lacking field errors", () => {
+      // The function itself typechecks (row grows, no error yet)
+      expect(() => typeOf('fn(s) -> { s | b: 2 }')).not.toThrow();
+      // But applying it to a closed record lacking field b errors at the call site
+      expect(() => typeOf('let f = fn(s) -> { s | b: 2 } in f({ a: 1 })')).toThrow(/b/);
+    });
+
+    it("rejects record update on closed record with absent field", () => {
+      expect(() => typeOf('let s = { a: 1 } in { s | b: 2 }')).toThrow(/b/);
+    });
+
+    it("rejects record update with type mismatch on field", () => {
+      expect(() => typeOf('let s = { a: 1 } in { s | a: "x" }')).toThrow();
+    });
+
+    it("infers record update with multiple fields", () => {
+      const t = typeOf('let s = { a: 1, b: 2 } in { s | a: 10, b: 20 }');
+      expect(t).toContain("a: Int");
+      expect(t).toContain("b: Int");
+    });
+
+    it("composing update with field access preserves one coherent open row", () => {
+      const t = typeOf('fn(s) -> if s.ok then { s | n: s.n + 1 } else s');
+      // Should have both ok and n fields in the row type
+      expect(t).toContain("ok");
+      expect(t).toContain("n");
+    });
+
+    it("update result flows into a function expecting closed record", () => {
+      // Define two functions, one that updates and one that consumes the record
+      const t = typeOf(`
+        let make_double = fn(v) -> v + v in
+        let update_and_use = fn(s) -> make_double({ s | n: 10 }.n) in
+        update_and_use({ n: 5 })
+      `);
+      expect(t).toBe("Int");
+    });
+
+    it("two sequential updates on same base identifier share the row", () => {
+      const t = typeOf('fn(s) -> let u1 = { s | a: 1 } in { u1 | b: 2 }');
+      // Result should be a function returning a record with open row
+      expect(t).toMatch(/->/);
+      expect(t).toContain("a");
+      expect(t).toContain("b");
+    });
+
+    it("AC2.2 Phase-1 ADT integration: record update with declared union field type", () => {
+      // With a declared ADT for the field, record update should accept constructor values
+      const source = `type Phase = Idle | Resting
+        let s = { phase: Idle, n: 0 } in
+        { s | phase: Resting }`;
+      const t = typeOfProgram(source);
+      expect(t).toContain("phase: Phase");
+      expect(t).toContain("n: Int");
+    });
+
+    it("AC2.2 Phase-1 ADT integration: record update rejects wrong type for ADT field", () => {
+      // Assigning wrong type to ADT field should error
+      const source = `type Phase = Idle | Resting
+        let s = { phase: Idle, n: 0 } in
+        { s | phase: 1 }`;
+      expect(() => typeOfProgram(source)).toThrow();
+    });
+
     it("infers tagged value type", () => {
-      expect(typeOf("Ok(42)")).toBe("Result(Int, String)");
+      expect(typeOf("Ok(42)")).toBe("Result(Int)");
     });
   });
 
@@ -122,6 +207,18 @@ describe("Type Inference", () => {
 
     it("infers match with tag patterns", () => {
       expect(typeOf("match Ok(5) { Ok(n) -> n + 1, Err(e) -> 0 }")).toBe("Int");
+    });
+
+    it("infers match with Bool guard", () => {
+      expect(typeOf("match Some(5) { Some(x) if x > 0 -> x, _ -> 0 }")).toBe("Int");
+    });
+
+    it("allows guard to use pattern bindings", () => {
+      expect(typeOf("match Some(3) { Some(x) if x == 3 -> x * 2, _ -> 0 }")).toBe("Int");
+    });
+
+    it("rejects non-Bool guard", () => {
+      expect(() => typeOf("match Some(3) { Some(x) if x -> x, _ -> 0 }")).toThrow(/Bool/);
     });
   });
 
@@ -275,18 +372,21 @@ describe("Type Inference", () => {
           const elemStr = typeToString(t.element, varNames);
           return `List(${elemStr})`;
         }
-        case "TResult": {
-          const okStr = typeToString(t.ok, varNames);
-          return `Result(${okStr})`;
-        }
         case "TTuple": {
           const elemStrs = t.elements.map(e => typeToString(e, varNames));
           return `(${elemStrs.join(", ")})`;
         }
         case "TRecord":
           return "[Record]"; // Simplified for prelude tests
-        case "TTag":
-          return `[Tag: ${t.tag}]`; // Simplified for prelude tests
+        case "TUnion": {
+          if (t.args.length === 0) {
+            return t.name;
+          }
+          const argStrs = t.args.map(a => typeToString(a, varNames));
+          return `${t.name}(${argStrs.join(", ")})`;
+        }
+        case "TParam":
+          return t.name;
       }
     }
 
@@ -375,6 +475,54 @@ describe("Type Inference", () => {
       const env = createPreludeTypeEnv();
       expect(() => infer(parse(lex("length([1, 2, 3])")), env)).not.toThrow();
     });
+
+    it("at renders as Int -> List(a) -> Result(a)", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      const scheme = env.get("at");
+      expect(scheme).toBeDefined();
+      const rendered = schemeToString(scheme!);
+      expect(rendered).toBe("Int -> List(a) -> Result(a)");
+    });
+
+    it("with_default renders as a -> Option(a) -> a", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      const scheme = env.get("with_default");
+      expect(scheme).toBeDefined();
+      const rendered = schemeToString(scheme!);
+      expect(rendered).toBe("a -> Option(a) -> a");
+    });
+
+    it("map_option renders as (a -> b) -> Option(a) -> Option(b)", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      const scheme = env.get("map_option");
+      expect(scheme).toBeDefined();
+      const rendered = schemeToString(scheme!);
+      expect(rendered).toBe("(a -> b) -> Option(a) -> Option(b)");
+    });
+
+    it("append renders as List(a) -> List(a) -> List(a)", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      const scheme = env.get("append");
+      expect(scheme).toBeDefined();
+      const rendered = schemeToString(scheme!);
+      expect(rendered).toBe("List(a) -> List(a) -> List(a)");
+    });
+
+    it("append accepts matching list types", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex("append([1, 2], [3, 4])")), env)).not.toThrow();
+    });
+
+    it("append rejects mismatched element types", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex('append([1, 2], ["a", "b"])')), env)).toThrow();
+    });
   });
 
   describe("rules prelude builtins", () => {
@@ -413,7 +561,7 @@ describe("Type Inference", () => {
     });
 
     it("lookup infers Result of the tuple value type", () => {
-      expect(typeWithPrelude('lookup("a", [("a", 1), ("b", 2)])')).toBe("Result(Int, String)");
+      expect(typeWithPrelude('lookup("a", [("a", 1), ("b", 2)])')).toBe("Result(Int)");
     });
 
     it("lookup rejects a key type mismatching the tuple key type", () => {
@@ -422,8 +570,8 @@ describe("Type Inference", () => {
       expect(() => infer(parse(lex('lookup(1, [("a", 1)])')), env)).toThrow(/unify/i);
     });
 
-    it("require infers Result(Unit, String)", () => {
-      expect(typeWithPrelude('require(true, "msg")')).toBe("Result(Unit, String)");
+    it("require infers Result(Unit)", () => {
+      expect(typeWithPrelude('require(true, "msg")')).toBe("Result(Unit)");
     });
 
     it("require rejects a non-String message", () => {
@@ -437,7 +585,37 @@ describe("Type Inference", () => {
         let a = require(str_len("x") > 0, "Company name is required")? in
         let b = require(true, "Role is required")? in
         Ok("valid")
-      `)).toBe("Result(String, String)");
+      `)).toBe("Result(String)");
+    });
+
+    it("at infers Result of the list element type", () => {
+      expect(typeWithPrelude("at(0, [10, 20, 30])")).toBe("Result(Int)");
+    });
+
+    it("at rejects non-Int index", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex('at("x", [1, 2, 3])')), env)).toThrow(/unify/i);
+    });
+
+    it("with_default infers the Option element type", () => {
+      expect(typeWithPrelude("with_default(0, Some(5))")).toBe("Int");
+    });
+
+    it("with_default rejects mismatched default and Option types", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex('with_default(0, Some("x"))')), env)).toThrow(/unify/i);
+    });
+
+    it("map_option infers the mapped Option type", () => {
+      expect(typeWithPrelude("map_option(fn(x) -> x * 2, Some(5))")).toBe("Option(Int)");
+    });
+
+    it("map_option rejects function with wrong input type", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex('map_option(fn(x) -> x ++ "!", Some(5))')), env)).toThrow(/unify/i);
     });
   });
   describe("operator operand constraints", () => {
@@ -532,18 +710,330 @@ describe("record and tag unification regressions", () => {
   });
 
   it("typechecks the same custom tag across match branches", () => {
-    expect(typeOf("match true { true -> Some(1), _ -> Some(2) }")).toBe("Some(Int)");
+    expect(typeOf("match true { true -> Some(1), _ -> Some(2) }")).toBe("Option(Int)");
   });
 
   it("typechecks identical nullary custom tags across match branches", () => {
-    expect(typeOf("match true { true -> None, _ -> None }")).toBe("None");
+    expect(typeOf("match true { true -> None, _ -> None }")).toBe("Option(d)");
   });
 
-  it("rejects different custom tags across branches with a message naming both tags", () => {
-    expect(() => typeOf("match true { true -> Some(1), _ -> None }")).toThrow(/tag Some.*tag None/);
+  it("matches constructors from same declared union across branches", () => {
+    const source = `type Choice = Yes(Int) | No
+      match true { true -> Yes(1), _ -> No }`;
+    expect(typeOfProgram(source)).toBe("Choice");
   });
 
   it("reports an infinite type instead of overflowing when a variable is unified with a tag wrapping it", () => {
     expect(() => typeOf("fn(x) -> match true { true -> x, _ -> Some(x) }")).toThrow(/infinite type/);
+  });
+});
+
+describe("Task 8: Constructor inference for declared unions", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("infers Shape constructor with payload", () => {
+    const source = `type Shape = Circle(Float) | Square(Float)
+      Circle(2.0)`;
+    expect(typeOfProgram(source)).toBe("Shape");
+  });
+
+  it("rejects constructor with wrong payload type", () => {
+    const source = `type Shape = Circle(Float) | Square(Float)
+      Circle(2)`;
+    expect(() => typeOfProgram(source)).toThrow();
+  });
+
+  it("rejects constructor with wrong arity", () => {
+    const source = `type Shape = Circle(Float)
+      Circle()`;
+    expect(() => typeOfProgram(source)).toThrow(/expects 1 arguments, got 0/);
+  });
+
+  it("rejects unknown constructor with did-you-mean", () => {
+    const source = `type Circle = Circle(Float)
+      Circl(2.0)`;
+    try {
+      typeOfProgram(source);
+      expect.unreachable();
+    } catch (e: any) {
+      expect(e.message).toContain("Unknown constructor");
+      expect(e.message).toContain("Circl");
+    }
+  });
+
+  it("Ok(1) infers Result(Int) from prelude", () => {
+    expect(typeOf("Ok(1)")).toBe("Result(Int)");
+  });
+
+  it("Err('x') unifies with Ok(1)", () => {
+    expect(typeOf('match Ok(1) { Ok(x) -> x, Err(e) -> 0 }')).toBe("Int");
+  });
+
+  it("Some(1.0) infers Option(Float) from prelude", () => {
+    expect(typeOf("Some(1.0)")).toBe("Option(Float)");
+  });
+
+  it("None unifies with Some(1.0)", () => {
+    expect(typeOf("match Some(1) { Some(x) -> x, None -> 0 }")).toBe("Int");
+  });
+});
+
+describe("Task 9: Match-subject unification for TagPat", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("matches declared union with Some/None patterns", () => {
+    const source = `type Choice(a) = Yes(a) | No
+      match Yes(5) { Yes(x) -> x, No -> 0 }`;
+    expect(typeOfProgram(source)).toBe("Int");
+  });
+
+  it("binds payload variable with instantiated type in match arm", () => {
+    const source = `type Event = LogSet({ reps: Int })
+      match LogSet({reps: 5}) { LogSet(p) -> p.reps, _ -> 0 }`;
+    expect(typeOfProgram(source)).toBe("Int");
+  });
+
+  it("rejects constructor not in subject union type", () => {
+    const source = `type Shape = Circle(Float)
+      match Circle(1.0) { Square(x) -> x, _ -> 0.0 }`;
+    expect(() => typeOfProgram(source)).toThrow();
+  });
+
+  it("rejects known constructor from different union in pattern (cross-union mismatch)", () => {
+    const source = `type Shape = Circle(Float)
+      type Color = Red | Blue
+      match Circle(1.0) { Red -> 0.0, _ -> 1.0 }`;
+    expect(() => typeOfProgram(source)).toThrow();
+  });
+
+  it("rejects unknown constructor in pattern with did-you-mean", () => {
+    const source = `type Shape = Circle(Float)
+      match Circle(1.0) { Circl(x) -> x, _ -> 0.0 }`;
+    expect(() => typeOfProgram(source)).toThrow(/Unknown constructor/);
+  });
+
+  it("prelude Option patterns work in match", () => {
+    const source = `match Some(1.0) { Some(v) -> v, None -> 0.0 }`;
+    expect(typeOf(source)).toBe("Float");
+  });
+});
+
+describe("Task 10: Try, Catch, Pipe forms with declared Result", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("? unwraps Result declared from prelude", () => {
+    expect(typeOf("Ok(5)?")).toBe("Int");
+  });
+
+  it("? in nested context", () => {
+    expect(typeOf("let x = Ok(1)? in x + 1")).toBe("Int");
+  });
+
+  it("catch binds error as String", () => {
+    // Verify that error is bound as String type
+    resetTypeVarCounter();
+    let env = createPreludeTypeEnv();
+    const src = 'Ok(5) |> catch e -> str_len(e)';
+    const type = infer(parse(lex(src)), env);
+    expect(prettyType(type)).toBe("Int");
+  });
+
+  it("pipe with try operator", () => {
+    expect(typeOf("Ok(5) |> fn(x) -> x? + 1")).toBe("Int");
+  });
+
+  it("? rejects Option type", () => {
+    expect(() => typeOf("Some(5)?")).toThrow(/Result/);
+  });
+});
+
+describe("Task 4: Coverage checker for union subjects", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("rejects match missing a union constructor", () => {
+    const source = `type Event = StartSession({ nowMs: Int }) | PauseSession | RestElapsed({ nowMs: Int })
+      match StartSession({ nowMs: 1 }) { StartSession(p) -> p.nowMs }`;
+    let error: Error | undefined;
+    try {
+      typeOfProgram(source);
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error).toBeDefined();
+    expect(error!.message).toMatch(/missing/i);
+    expect(error!.message).toMatch(/PauseSession/);
+    expect(error!.message).toMatch(/RestElapsed\(_\)/);
+    expect(error!.message).toMatch(/line/i);
+  });
+
+  it("match with all constructors checks ok", () => {
+    const source = `type Event = StartSession({ nowMs: Int }) | PauseSession | RestElapsed({ nowMs: Int })
+      match StartSession({ nowMs: 1 }) {
+        StartSession(p) -> p.nowMs,
+        PauseSession -> 0,
+        RestElapsed(p) -> p.nowMs
+      }`;
+    expect(typeOfProgram(source)).toBe("Int");
+  });
+
+  it("unguarded wildcard arm makes match exhaustive", () => {
+    const source = `type Event = StartSession({ nowMs: Int }) | PauseSession | RestElapsed({ nowMs: Int })
+      match StartSession({ nowMs: 1 }) {
+        StartSession(p) -> p.nowMs,
+        _ -> 0
+      }`;
+    expect(typeOfProgram(source)).toBe("Int");
+  });
+
+  it("unguarded ident arm makes match exhaustive", () => {
+    const source = `type Event = StartSession({ nowMs: Int })
+      match StartSession({ nowMs: 1 }) {
+        StartSession(p) -> p.nowMs,
+        e -> 0
+      }`;
+    expect(typeOfProgram(source)).toBe("Int");
+  });
+
+  it("guarded arms do not count toward coverage", () => {
+    const source = `type Event = StartSession | PauseSession | RestElapsed
+      match StartSession {
+        StartSession if false -> 1,
+        PauseSession -> 2,
+        RestElapsed -> 3
+      }`;
+    let error: Error | undefined;
+    try {
+      typeOfProgram(source);
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error).toBeDefined();
+    expect(error!.message).toMatch(/missing/i);
+    expect(error!.message).toMatch(/StartSession/);
+  });
+
+  it("Option(Int) missing None fails exhaustiveness", () => {
+    const source = `match Some(1) { Some(x) -> x }`;
+    let error: Error | undefined;
+    try {
+      typeOf(source);
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error).toBeDefined();
+    expect(error!.message).toMatch(/missing/i);
+    expect(error!.message).toMatch(/None/);
+  });
+
+  it("conservative rule: refutable single pattern does not cover", () => {
+    const source = `type Msg = Code(Int)
+      match Code(1) {
+        Code(1) -> "one"
+      }`;
+    let error: Error | undefined;
+    try {
+      typeOfProgram(source);
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error).toBeDefined();
+    expect(error!.message).toMatch(/missing/i);
+    expect(error!.message).toMatch(/Code\(_\)/);
+  });
+
+  it("conservative nested-refutable rule: joint coverage fails", () => {
+    const source = `type Wrap = W(Option(Int))
+      match W(Some(1)) {
+        W(Some(x)) -> x,
+        W(None) -> 0
+      }`;
+    let error: Error | undefined;
+    try {
+      typeOfProgram(source);
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error).toBeDefined();
+    expect(error!.message).toMatch(/missing/i);
+    expect(error!.message).toMatch(/W\(_\)/);
+  });
+
+  it("conservative rule: unguarded irrefutable payload covers", () => {
+    const source = `type Wrap = W(Option(Int))
+      match W(Some(1)) {
+        W(o) -> match o { Some(x) -> x, None -> 0 },
+        _ -> 0
+      }`;
+    expect(typeOfProgram(source)).toBe("Int");
+  });
+});
+
+describe("Task 5: Coverage for Bool and non-union subjects", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("Bool with true and false is exhaustive", () => {
+    const source = `match true { true -> 1, false -> 2 }`;
+    expect(typeOf(source)).toBe("Int");
+  });
+
+  it("Bool missing false is inexhaustive", () => {
+    const source = `match true { true -> 1 }`;
+    expect(() => typeOf(source)).toThrow(/Missing patterns:\n\s*- false/);
+  });
+
+  it("Int literals require catch-all", () => {
+    const source = `match 1 { 1 -> "one", 2 -> "two" }`;
+    expect(() => typeOf(source)).toThrow();
+  });
+
+  it("Int with wildcard is exhaustive", () => {
+    const source = `match 1 { 1 -> "one", 2 -> "two", _ -> "other" }`;
+    expect(typeOf(source)).toBe("String");
+  });
+
+  it("String requires catch-all", () => {
+    const source = `match "hello" { "hello" -> 1, "world" -> 2 }`;
+    expect(() => typeOf(source)).toThrow();
+  });
+
+  it("unresolved type variable requires catch-all", () => {
+    const source = `fn(x) -> match x { 1 -> true }`;
+    expect(() => typeOf(source)).toThrow();
+  });
+
+  it("unresolved type variable with wildcard is ok", () => {
+    const source = `fn(x) -> match x { 1 -> true, _ -> false }`;
+    expect(typeOf(source)).toMatch(/-> /);
+  });
+});
+
+describe("Task 6: AC1.6 wrong-arm payload access + load-gate exhaustiveness tests", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("payload access from wrong constructor arm is caught", () => {
+    const source = `type Event = LogSet({ reps: Int }) | PauseSession
+      match LogSet({ reps: 5 }) {
+        LogSet(p) -> p.reps,
+        PauseSession -> p.reps
+      }`;
+    expect(() => typeOfProgram(source)).toThrow();
+  });
+
+  it("correct pattern binding allows payload access", () => {
+    const source = `type Event = LogSet({ reps: Int }) | PauseSession
+      match LogSet({ reps: 5 }) {
+        LogSet(p) -> p.reps,
+        PauseSession -> 0
+      }`;
+    expect(typeOfProgram(source)).toBe("Int");
+  });
+
+  it("payload-less constructor cannot be given a sub-pattern", () => {
+    const source = `type Event = LogSet({ reps: Int }) | PauseSession
+      match PauseSession {
+        PauseSession(p) -> p,
+        _ -> 0
+      }`;
+    expect(() => typeOfProgram(source)).toThrow();
   });
 });

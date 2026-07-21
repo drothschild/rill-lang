@@ -5,8 +5,8 @@ export type Type =
   | { kind: "TList"; element: Type }
   | { kind: "TTuple"; elements: Type[] }
   | { kind: "TRecord"; fields: Map<string, Type>; rest: Type | null }
-  | { kind: "TResult"; ok: Type }
-  | { kind: "TTag"; tag: string; args: Type[] };
+  | { kind: "TUnion"; name: string; args: Type[] }
+  | { kind: "TParam"; name: string };
 
 let _nextId = 0;
 export function freshTypeVar(): Type {
@@ -31,8 +31,8 @@ export function prettyType(t: Type): string {
       const fields = [...t.fields.entries()].map(([k, v]) => `${k}: ${prettyType(v)}`).join(", ");
       return t.rest ? `{ ${fields} | ${prettyType(t.rest)} }` : `{ ${fields} }`;
     }
-    case "TResult": return `Result(${prettyType(t.ok)}, String)`;
-    case "TTag": return t.args.length === 0 ? t.tag : `${t.tag}(${t.args.map(prettyType).join(", ")})`;
+    case "TUnion": return t.args.length === 0 ? t.name : `${t.name}(${t.args.map(prettyType).join(", ")})`;
+    case "TParam": return t.name;
   }
 }
 
@@ -41,6 +41,7 @@ export function prettyType(t: Type): string {
 export const T = {
   String: { kind: "TCon", name: "String" } as Type,
   Int: { kind: "TCon", name: "Int" } as Type,
+  Float: { kind: "TCon", name: "Float" } as Type,
   Bool: { kind: "TCon", name: "Bool" } as Type,
   Unit: { kind: "TCon", name: "Unit" } as Type,
   list(element: Type): Type {
@@ -52,5 +53,8 @@ export const T = {
       fields: new Map(Object.entries(fields)),
       rest: open ? freshTypeVar() : null,
     };
+  },
+  union(name: string, args: Type[] = []): Type {
+    return { kind: "TUnion", name, args };
   },
 };

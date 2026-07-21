@@ -19,6 +19,9 @@ export enum TokenKind {
   Then = "Then",
   Else = "Else",
   Rule = "Rule",
+  Type = "Type",
+  Alias = "Alias",
+  Import = "Import",
 
   // Identifiers
   Ident = "Ident",
@@ -43,6 +46,7 @@ export enum TokenKind {
   Bang = "Bang",
   Arrow = "Arrow",
   Pipe = "Pipe",
+  Bar = "Bar",
   Question = "Question",
 
   // Delimiters

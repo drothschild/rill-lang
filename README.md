@@ -143,14 +143,283 @@ match (has_company, has_role, salary_valid) {
 }
 ```
 
-### Pattern Matching
+### Algebraic Data Types (ADTs)
+
+Rill supports declared algebraic data types with unions, enabling exhaustive pattern matching and type-safe state machines.
+
+**Type declarations** define named unions with constructors:
+
 ```
+type Phase = Idle | Working | Resting
+
+type Event =
+  | Start({ sessionId: String })
+  | Log({ reps: Int, weight: Float })
+  | Pause
+```
+
+Constructors can carry payloads (data enclosed in `{}`); payloads are structural records with named fields. Constructor names are globally unique in scope (the Elm rule), so the typechecker can infer which type a constructor belongs to without annotation.
+
+**Type parameters** (generics) are supported:
+
+```
+type Option(a) = Some(a) | None
+
+type Result(a) = Ok(a) | Err(String)
+```
+
+Type variables like `a` are introduced in the type declaration and instantiated at use sites. The prelude defines `Option` and `Result` this way, so you can use `Option(Int)` or `Result({ status: Bool })`.
+
+### Alias Declarations
+
+An `alias` declaration names a record type for reuse in rule headers and other contexts:
+
+```
+alias SessionState = { phase: Phase, setCount: Int, isActive: Bool }
+
+rule process(state: SessionState) -> SessionState
+  { state | phase: Resting }
+```
+
+Aliases expand structurally — the typechecker doesn't distinguish between an aliased name and its expansion — so they compose freely with open records (`..`):
+
+```
+alias Config = { level: Int, name: String }
+
+let add_extra = fn(cfg) -> { cfg | extra: true }  -- works if caller's cfg has extra
+```
+
+### Pattern Matching and Exhaustiveness
+
+A `match` expression is exhaustive when it covers every constructor of its subject's declared type:
+
+```
+type Shape = Circle({ r: Int }) | Rect({ w: Int, h: Int })
+
 let area = fn(shape) -> match shape {
-  Circle(r) -> r * r * 3,
-  Rect(w, h) -> w * h
+  Circle(c) -> c.r * c.r * 3,
+  Rect(r) -> r.w * r.h
 }
-in area(Rect(3, 4))   -- => 12
+in area(Rect({ w: 3, h: 4 }))   -- => 12
 ```
+
+If a match is not exhaustive, the program fails at load time (the boot gate):
+
+```
+type Phase = Idle | Working | Resting | Paused
+
+let describe = fn(p) -> match p {
+  Idle -> "ready",
+  Working -> "active"
+  -- Error: This match does not cover all possible values of Phase.
+  -- Missing patterns:
+  --   - Resting
+  --   - Paused
+}
+```
+
+On non-union subjects (like `Bool` or a plain record), a match must have a catch-all arm (`_`):
+
+```
+match some_bool {
+  true -> "yes",
+  false -> "no"
+}
+
+match x {
+  0 -> "zero",
+  _ -> "other"
+}
+```
+
+### Match Guards
+
+A guard is a boolean condition attached to a pattern arm with `if`. Guards are evaluated with pattern bindings in scope and fall through to the next arm if they are false:
+
+```
+type Event = SetLog({ reps: Int, rpe: Option(Float) }) | Rest
+
+match event {
+  SetLog(log) if log.reps > 0 -> "logged a set",
+  SetLog(_) -> "invalid set",
+  Rest -> "pausing"
+}
+```
+
+**Important:** Guards do not count toward exhaustiveness. An arm that is only guarded (no unguarded arm for its constructor) leaves a gap:
+
+```
+type Phase = Idle | Working | Done
+
+let check = fn(p) -> match p {
+  Idle if false -> 1,
+  Working -> 2,
+  Done -> 3
+  -- Still incomplete: Idle has only a guarded arm, so if the guard fails,
+  -- there is no fallback. The typechecker rejects this match.
+}
+```
+
+To accept all values of a constructor, you must include an unguarded arm or make the guard exhaustive (e.g. use a boolean field that always has one branch true).
+
+### Structural Tag Removal and Migration
+
+**Prior to this version:** Rill allowed bare constructors like `Resting` or `Next` without declaring their types. These were inferred as "structural tags" — ad hoc unions owned by the context. This syntax is no longer supported.
+
+**New requirement:** Every constructor must belong to a declared `type`. Unknown constructors are load-time errors with suggestions:
+
+```
+-- Old code (no longer works):
+let state = Resting in state
+
+-- Error: Unknown constructor: Resting
+-- Did you mean one of: ...
+```
+
+**Migration path:** Declare the type first:
+
+```
+type Phase = Idle | Resting | Working
+
+let state = Restng in state  -- typo in constructor name
+-- Error at line 3, col 13:
+--   Unknown constructor: Restng (did you mean Resting?)
+```
+
+This change improves type safety (all state is explicit) and enables exhaustiveness checking, the core safety feature of a state machine language.
+
+### Record Update
+
+The record update syntax creates a shallow copy of a record with one or more fields changed:
+
+```
+let state = { phase: Working, count: 5 }
+let updated = { state | phase: Idle, count: 0 }
+-- updated is { phase: Idle, count: 0 }, state is unchanged
+```
+
+Rules:
+- The base record must already contain every field being updated; adding new fields is an error.
+- The type of each updated field cannot change (PureScript restriction).
+- Open records and row polymorphism work as expected — a function expecting `{ phase, .. }` can be called with a record that has extra fields, and updates preserve those extras.
+
+```
+let with_extra = fn(s) -> { s | phase: Resting }
+
+with_extra({ phase: Working, extra_field: "ok" })
+-- => { phase: Resting, extra_field: "ok" }
+```
+
+### List Indexing and Option Absence
+
+**List indexing** via the `at` builtin replaces sentinel values and host-side pre-indexing:
+
+```
+at(0, [10, 20, 30])  -- => Ok(10)
+at(2, [10, 20, 30])  -- => Ok(30)
+at(5, [10, 20, 30])  -- => Err("index 5 out of bounds (list has 3 elements)")
+at(-1, [10, 20, 30]) -- => Err("index -1 out of bounds (list has 3 elements)")
+
+[10, 20, 30] |> at(1)? |> fn(v) -> v * 2  -- => 40
+```
+
+**Option type** replaces sentinel values like `rpe: -1.0` or `nextPhase: ""`:
+
+```
+alias Set = { reps: Int, weight: Float, rpe: Option(Float) }
+
+let s = { reps: 10, weight: 100.0, rpe: None }
+let s2 = { s | rpe: Some(7.5) }
+
+match s2.rpe {
+  Some(rpe_val) -> "RPE: " ++ to_string(rpe_val),
+  None -> "no RPE recorded"
+}
+```
+
+**Option helpers:**
+
+- `with_default : a -> Option(a) -> a` — unwrap or return a default:
+  ```
+  with_default(0.0, Some(7.5))  -- => 7.5
+  with_default(1.5, None)       -- => 1.5
+  ```
+
+- `map_option : (a -> b) -> Option(a) -> Option(b)` — transform inside an Option:
+  ```
+  map_option(fn(x) -> x * 2, Some(5))  -- => Some(10)
+  map_option(fn(x) -> x * 2, None)     -- => None
+  ```
+
+### Modules
+
+For larger rule files, code can be split across modules using `import`:
+
+```
+import "types" as t
+import "helpers" as h
+
+-- Call qualified value
+let duration = h.estimate_duration(session)
+
+-- Use unqualified types/constructors (imported from module or declared here)
+match event {
+  t.StartSession(p) -> ...
+  -- Actually: just StartSession(p) if StartSession was imported
+}
+```
+
+**Import semantics:**
+- A module is a `.lv` file containing `type`, `alias`, and `let` declarations.
+- **Values** from imported modules are accessed with dot notation (`h.function_name`).
+- **Types and constructors** are imported unqualified — they enter scope as if declared locally (constructor names are globally unique, so ambiguity is impossible).
+- The resolver is pluggable; the CLI uses filesystem resolution relative to the importing file.
+
+**Cycle detection:** An import cycle is a load-time error listing the full cycle path. Diamond imports (two modules importing a shared third) are fine and do not duplicate-check the shared module.
+
+**Type errors in helpers:** If an imported helper has a type error, the error is located in the helper's source; the importing rule fails at the boot gate.
+
+### Bridge and Engine
+
+When embedding Rill in TypeScript, values cross the boundary via `jsToRill` and `rillToJs`, both exported from the library:
+
+**JavaScript to Rill (`jsToRill`):**
+- Type-directed conversion against the rule's declared parameter types.
+- Declared `Int`: `42` → Int; `42.5` → error naming the field.
+- Declared `Float`: `42` → `42.0` (coerces integers); `42.5` → Float.
+- Declared `Option(T)`: `undefined` → `None`; present value → `Some(converted T)`.
+- Declared union (ADT): expects `{ tag: string, value?: unknown }`; validates tag and recursively converts payload.
+- Declared record: field-by-field conversion; missing non-Option field → error; extra keys ignored.
+- Lists: element-wise conversion.
+
+**Rill to JavaScript (`rillToJs`):**
+- Tag (no payload): `{ tag: "Resting" }`.
+- Tag with payload: `{ tag: "LogSet", value: { reps: 10, weight: 100.0 } }`.
+- `Option`: `Some(x)` → unwrapped `x`; `None` → `undefined`.
+- Records, lists, strings, numbers as-is.
+
+**Engine dispatch loop** (`createEngine`):**
+
+```typescript
+const engine = createEngine({
+  resolve: (path) => readFileSync(path, "utf-8"),  // module resolver
+  entry: "transition.lv",                          // entry rule path
+  initialState: { phase: "Idle", count: 0 },
+  executors: {
+    "ScheduleRest": ({ deadlineMs }) => { ... },
+    "LogSet": ({ reps, weight }) => { ... },
+  }
+});
+
+const newState = engine.dispatch({ tag: "SetLog", value: { reps: 10, weight: 100.0 } });
+```
+
+The engine expects an entry rule with signature:
+```
+rule transition(state: StateType, event: EventType) -> Result({ state: StateType, effects: List(EffectType) })
+```
+
+On `Ok`, the new state is extracted, effects are applied in order, and the engine's internal state is swapped. On `Err`, a `TransitionError` is thrown and state is not swapped.
 
 ### If/Then/Else
 `if` is an expression, so `else` is always required — every `if` produces a value. Both branches must have the same type, and chained `else if` nests naturally:
@@ -304,8 +573,5 @@ Note: at runtime `length` also accepts a `String`, but its type signature is `Li
 
 ## Known Limitations
 
-- No algebraic data type declarations (tags are structural)
 - The CLI runner (`runSource`) type-checks against an empty environment and skips type errors without source locations, so it is more permissive than the embedding API (`infer` with `createPreludeTypeEnv`) — a program that runs at the CLI can still fail an embedder's load-time type check
-- No module system
 - No string interpolation
-- Single-file programs only

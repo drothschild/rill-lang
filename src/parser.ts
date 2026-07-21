@@ -1,5 +1,5 @@
 import { Token, TokenKind } from "./token";
-import { Expr } from "./ast";
+import { Expr, Declaration, TypeDecl, AliasDecl, ConstructorDef, ImportDecl } from "./ast";
 import { Span } from "./span";
 import { Type, freshTypeVar } from "./types";
 
@@ -13,15 +13,19 @@ export function parse(tokens: Token[]): Expr {
 export interface RuleParam {
   name: string;
   type: Type;
+  span: Span;
 }
 
 export interface RuleHeader {
   name: string;
   params: RuleParam[];
   returnType: Type | null;
+  returnTypeSpan: Span | null;
 }
 
 export interface Program {
+  imports: ImportDecl[];
+  declarations: Declaration[];
   header: RuleHeader | null;
   body: Expr;
 }
@@ -30,10 +34,24 @@ export interface Program {
 // followed by the body expression. Headerless sources parse exactly as parse().
 export function parseProgram(tokens: Token[]): Program {
   const parser = new Parser(tokens);
+  const imports: ImportDecl[] = [];
+  const declarations: Declaration[] = [];
+
+  // Parse imports and declarations (type and alias) in any order
+  while (parser.at(TokenKind.Import) || parser.at(TokenKind.Type) || parser.at(TokenKind.Alias)) {
+    if (parser.at(TokenKind.Import)) {
+      imports.push(parser.parseImportDecl());
+    } else if (parser.at(TokenKind.Type)) {
+      declarations.push(parser.parseTypeDecl());
+    } else {
+      declarations.push(parser.parseAliasDecl());
+    }
+  }
+
   const header = parser.at(TokenKind.Rule) ? parser.parseRuleHeader() : null;
   const body = parser.parseExpr(0);
   parser.expect(TokenKind.EOF);
-  return { header, body };
+  return { imports, declarations, header, body };
 }
 
 class Parser {
@@ -43,6 +61,10 @@ class Parser {
 
   peek(): Token {
     return this.tokens[this.pos];
+  }
+
+  peekNext(): Token | undefined {
+    return this.pos + 1 < this.tokens.length ? this.tokens[this.pos + 1] : undefined;
   }
 
   advance(): Token {
@@ -200,9 +222,38 @@ class Parser {
         this.expect(TokenKind.RParen);
         return first;
       }
-      // Record literal
+      // Record literal or Record update
       case TokenKind.LBrace: {
         const lbrace = this.advance();
+
+        // Check for record update: { base | fields }
+        if (this.at(TokenKind.Ident) && this.peekNext()?.kind === TokenKind.Bar) {
+          const baseToken = this.advance();
+          const base = baseToken.lexeme;
+          const baseSpan = baseToken.span;
+          this.expect(TokenKind.Bar);
+
+          // Parse update fields
+          const fields: { name: string; value: Expr }[] = [];
+          if (this.at(TokenKind.RBrace)) {
+            throw new Error(`Empty record update at line ${baseToken.span.start.line}, col ${baseToken.span.start.col}`);
+          }
+          fields.push(this.parseRecordField());
+          while (this.eat(TokenKind.Comma)) {
+            if (this.at(TokenKind.RBrace)) break;
+            fields.push(this.parseRecordField());
+          }
+          const rbrace = this.expect(TokenKind.RBrace);
+          return {
+            kind: "RecordUpdate",
+            base,
+            baseSpan,
+            fields,
+            span: { start: lbrace.span.start, end: rbrace.span.end },
+          };
+        }
+
+        // Regular record literal
         const fields: { name: string; value: Expr }[] = [];
         if (!this.at(TokenKind.RBrace)) {
           fields.push(this.parseRecordField());
@@ -347,21 +398,121 @@ class Parser {
     }
     this.expect(TokenKind.RParen);
     let returnType: Type | null = null;
+    let returnTypeSpan: Span | null = null;
     if (this.eat(TokenKind.Arrow)) {
+      const startSpan = this.peek().span;
       returnType = this.parseTypeAnn();
+      returnTypeSpan = this.spanFrom(startSpan);
     }
-    return { name, params, returnType };
+    return { name, params, returnType, returnTypeSpan };
   }
 
   parseRuleParam(): RuleParam {
     const name = this.expect(TokenKind.Ident).lexeme;
     this.expect(TokenKind.Colon);
-    return { name, type: this.parseTypeAnn() };
+    const startSpan = this.peek().span;
+    const type = this.parseTypeAnn();
+    const span = this.spanFrom(startSpan);
+    return { name, type, span };
   }
 
-  parseTypeAnn(): Type {
+  parseTypeDecl(): TypeDecl {
+    const startToken = this.expect(TokenKind.Type);
+    const name = this.expect(TokenKind.UpperIdent).lexeme;
+
+    // Parse optional type parameters: (a, b, c)
+    const params: string[] = [];
+    if (this.eat(TokenKind.LParen)) {
+      if (!this.at(TokenKind.RParen)) {
+        params.push(this.expect(TokenKind.Ident).lexeme);
+        while (this.eat(TokenKind.Comma)) {
+          if (this.at(TokenKind.RParen)) break;
+          params.push(this.expect(TokenKind.Ident).lexeme);
+        }
+      }
+      this.expect(TokenKind.RParen);
+    }
+
+    this.expect(TokenKind.Eq);
+
+    // Parse constructors: [|] Ctor | Ctor | ...
+    const constructors: ConstructorDef[] = [];
+    this.eat(TokenKind.Bar); // optional leading |
+
+    constructors.push(this.parseConstructor(params));
+    while (this.eat(TokenKind.Bar)) {
+      constructors.push(this.parseConstructor(params));
+    }
+
+    const span = this.spanFrom(startToken.span);
+    return { kind: "TypeDecl", name, params, constructors, span };
+  }
+
+  parseConstructor(activeParams?: string[]): ConstructorDef {
+    const token = this.expect(TokenKind.UpperIdent);
+    const name = token.lexeme;
+    let payload: Type | null = null;
+
+    if (this.at(TokenKind.LParen)) {
+      this.advance(); // consume (
+      payload = this.parseTypeAnn(activeParams);
+      this.expect(TokenKind.RParen);
+    }
+
+    return { name, payload, span: token.span };
+  }
+
+  parseAliasDecl(): AliasDecl {
+    const startToken = this.expect(TokenKind.Alias);
+    const name = this.expect(TokenKind.UpperIdent).lexeme;
+
+    // Parse optional type parameters: (a, b, c)
+    const params: string[] = [];
+    if (this.eat(TokenKind.LParen)) {
+      if (!this.at(TokenKind.RParen)) {
+        params.push(this.expect(TokenKind.Ident).lexeme);
+        while (this.eat(TokenKind.Comma)) {
+          if (this.at(TokenKind.RParen)) break;
+          params.push(this.expect(TokenKind.Ident).lexeme);
+        }
+      }
+      this.expect(TokenKind.RParen);
+    }
+
+    this.expect(TokenKind.Eq);
+    const type = this.parseTypeAnn(params);
+
+    const span = this.spanFrom(startToken.span);
+    return { kind: "AliasDecl", name, params, type, span };
+  }
+
+  parseImportDecl(): ImportDecl {
+    const startToken = this.expect(TokenKind.Import);
+    const pathToken = this.expect(TokenKind.String);
+    const path = pathToken.lexeme.slice(1, -1); // Remove quotes
+    this.expect(TokenKind.Ident); // Expect 'as'
+    if (this.tokens[this.pos - 1].lexeme !== "as") {
+      throw new Error(
+        `Expected 'as' keyword in import statement at line ${pathToken.span.start.line}, col ${pathToken.span.start.col}`
+      );
+    }
+    const alias = this.expect(TokenKind.Ident).lexeme;
+    const span = this.spanFrom(startToken.span);
+    return { kind: "ImportDecl", path, alias, span };
+  }
+
+  parseTypeAnn(activeParams?: string[]): Type {
     const token = this.peek();
     switch (token.kind) {
+      case TokenKind.Ident: {
+        const name = this.advance().lexeme;
+        // Check if this identifier is a type parameter in scope
+        if (activeParams && activeParams.includes(name)) {
+          return { kind: "TParam", name };
+        }
+        // Otherwise treat as a type constructor
+        return { kind: "TCon", name };
+      }
       case TokenKind.UpperIdent: {
         this.advance();
         switch (token.lexeme) {
@@ -369,18 +520,29 @@ class Parser {
             return { kind: "TCon", name: token.lexeme };
           case "List": {
             this.expect(TokenKind.LParen);
-            const element = this.parseTypeAnn();
+            const element = this.parseTypeAnn(activeParams);
             this.expect(TokenKind.RParen);
             return { kind: "TList", element };
           }
-          case "Result": {
-            this.expect(TokenKind.LParen);
-            const ok = this.parseTypeAnn();
-            this.expect(TokenKind.RParen);
-            return { kind: "TResult", ok };
+          default: {
+            // Parse named type references (unions or aliases) with optional type arguments
+            const name = token.lexeme;
+            const args: Type[] = [];
+
+            if (this.at(TokenKind.LParen)) {
+              this.advance(); // consume (
+              if (!this.at(TokenKind.RParen)) {
+                args.push(this.parseTypeAnn(activeParams));
+                while (this.eat(TokenKind.Comma)) {
+                  if (this.at(TokenKind.RParen)) break;
+                  args.push(this.parseTypeAnn(activeParams));
+                }
+              }
+              this.expect(TokenKind.RParen);
+            }
+
+            return { kind: "TUnion", name, args };
           }
-          default:
-            throw new Error(`Unknown type name '${token.lexeme}' at line ${token.span.start.line}, col ${token.span.start.col} (expected Int, Float, String, Bool, Unit, List(..), Result(..), a record type, or a tuple type)`);
         }
       }
       // Record type: { field: Type, .. } — trailing `..` marks an open row
@@ -396,7 +558,7 @@ class Parser {
           }
           const fieldName = this.expect(TokenKind.Ident).lexeme;
           this.expect(TokenKind.Colon);
-          fields.set(fieldName, this.parseTypeAnn());
+          fields.set(fieldName, this.parseTypeAnn(activeParams));
           if (!this.eat(TokenKind.Comma)) break;
         }
         this.expect(TokenKind.RBrace);
@@ -405,11 +567,11 @@ class Parser {
       // Tuple type: (A, B, ...) — single parens are grouping
       case TokenKind.LParen: {
         this.advance();
-        const first = this.parseTypeAnn();
+        const first = this.parseTypeAnn(activeParams);
         if (this.eat(TokenKind.Comma)) {
-          const elements: Type[] = [first, this.parseTypeAnn()];
+          const elements: Type[] = [first, this.parseTypeAnn(activeParams)];
           while (this.eat(TokenKind.Comma)) {
-            elements.push(this.parseTypeAnn());
+            elements.push(this.parseTypeAnn(activeParams));
           }
           this.expect(TokenKind.RParen);
           return { kind: "TTuple", elements };
@@ -459,11 +621,18 @@ class Parser {
     };
   }
 
-  parseMatchCase(): { pattern: import("./ast").Pattern; body: Expr } {
+  parseMatchCase(): { pattern: import("./ast").Pattern; guard?: Expr; body: Expr } {
     const pattern = this.parsePattern();
+    let guard: Expr | undefined;
+    if (this.at(TokenKind.If)) {
+      this.advance(); // consume 'if'
+      guard = this.parseExpr(0);
+      // Reject any Try (?) operators in the guard
+      checkNoTryInGuard(guard);
+    }
     this.expect(TokenKind.Arrow);
     const body = this.parseExpr(0);
-    return { pattern, body };
+    return { pattern, guard, body };
   }
 
   parseIf(): Expr {
@@ -640,5 +809,94 @@ function tokenToOp(kind: TokenKind): string {
     case TokenKind.AmpAmp: return "&&";
     case TokenKind.PipePipe: return "||";
     default: throw new Error(`Unknown operator token: ${kind}`);
+  }
+}
+
+// Walk an expression tree to find Try nodes (? operator) and reject them with an error
+function checkNoTryInGuard(expr: Expr): void {
+  switch (expr.kind) {
+    case "Try": {
+      throw new Error(
+        `guards may not use the ? operator at line ${expr.span.start.line}, col ${expr.span.start.col}`
+      );
+    }
+    case "BinOp":
+      checkNoTryInGuard(expr.left);
+      checkNoTryInGuard(expr.right);
+      break;
+    case "UnaryOp":
+      checkNoTryInGuard(expr.expr);
+      break;
+    case "Call":
+      checkNoTryInGuard(expr.fn);
+      checkNoTryInGuard(expr.arg);
+      break;
+    case "Pipe":
+      checkNoTryInGuard(expr.left);
+      checkNoTryInGuard(expr.right);
+      break;
+    case "Let":
+      checkNoTryInGuard(expr.value);
+      checkNoTryInGuard(expr.body);
+      break;
+    case "Fn":
+      checkNoTryInGuard(expr.body);
+      break;
+    case "Match":
+      checkNoTryInGuard(expr.subject);
+      for (const c of expr.cases) {
+        if (c.guard) checkNoTryInGuard(c.guard);
+        checkNoTryInGuard(c.body);
+      }
+      break;
+    case "If":
+      checkNoTryInGuard(expr.cond);
+      checkNoTryInGuard(expr.then);
+      checkNoTryInGuard(expr.else_);
+      break;
+    case "List":
+      for (const elem of expr.elements) {
+        checkNoTryInGuard(elem);
+      }
+      break;
+    case "Tuple":
+      for (const elem of expr.elements) {
+        checkNoTryInGuard(elem);
+      }
+      break;
+    case "Record":
+      for (const field of expr.fields) {
+        checkNoTryInGuard(field.value);
+      }
+      break;
+    case "FieldAccess":
+      checkNoTryInGuard(expr.expr);
+      break;
+    case "RecordUpdate":
+      for (const field of expr.fields) {
+        checkNoTryInGuard(field.value);
+      }
+      break;
+    case "Tag":
+      for (const arg of expr.args) {
+        checkNoTryInGuard(arg);
+      }
+      break;
+    case "Catch":
+      checkNoTryInGuard(expr.expr);
+      checkNoTryInGuard(expr.fallback);
+      break;
+    // Leaf nodes: IntLit, FloatLit, StringLit, BoolLit, UnitLit, Ident
+    case "IntLit":
+    case "FloatLit":
+    case "StringLit":
+    case "BoolLit":
+    case "UnitLit":
+    case "Ident":
+      break;
+    default:
+      // This will cause a TypeScript compile error if a new Expr kind is added
+      const _exhaustivenessCheck: never = expr;
+      throw new Error(`Unhandled Expr kind in checkNoTryInGuard: ${_exhaustivenessCheck}`);
   }
 }

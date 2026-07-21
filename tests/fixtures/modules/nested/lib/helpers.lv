@@ -1,0 +1,5 @@
+import "shared" as shared_util
+
+let add = fn(a) -> fn(b) -> shared_util.combine(a)(b)
+
+42

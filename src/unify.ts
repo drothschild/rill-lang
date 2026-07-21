@@ -31,8 +31,19 @@ export function unify(t1: Type, t2: Type, subst: Substitution = new Map()): Subs
     return subst;
   }
 
-  if (t1.kind === "TResult" && t2.kind === "TResult") {
-    return unify(t1.ok, t2.ok, subst);
+  if (t1.kind === "TUnion" && t2.kind === "TUnion") {
+    if (t1.name !== t2.name) {
+      throw new TypeError(`Cannot unify ${t1.name} with ${t2.name}`);
+    }
+    if (t1.args.length !== t2.args.length) {
+      throw new TypeError(
+        `Union ${t1.name} arity mismatch: ${t1.args.length} vs ${t2.args.length}`
+      );
+    }
+    for (let i = 0; i < t1.args.length; i++) {
+      subst = unify(t1.args[i], t2.args[i], subst);
+    }
+    return subst;
   }
 
   if (t1.kind === "TRecord" && t2.kind === "TRecord") {
@@ -73,21 +84,6 @@ export function unify(t1: Type, t2: Type, subst: Substitution = new Map()): Subs
     return unify(t2.rest, rowWithTail(only1, sharedTail), subst);
   }
 
-  if (t1.kind === "TTag" && t2.kind === "TTag") {
-    if (t1.tag !== t2.tag) {
-      throw new TypeError(`Cannot unify tag ${t1.tag} with tag ${t2.tag}`);
-    }
-    if (t1.args.length !== t2.args.length) {
-      throw new TypeError(
-        `Tag ${t1.tag} arity mismatch: ${t1.args.length} vs ${t2.args.length}`
-      );
-    }
-    for (let i = 0; i < t1.args.length; i++) {
-      subst = unify(t1.args[i], t2.args[i], subst);
-    }
-    return subst;
-  }
-
   throw new TypeError(`Cannot unify ${t1.kind} with ${t2.kind}`);
 }
 
@@ -115,14 +111,14 @@ function occursIn(id: number, t: Type, subst: Substitution): boolean {
   if (t.kind === "TFn") return occursIn(id, t.param, subst) || occursIn(id, t.ret, subst);
   if (t.kind === "TList") return occursIn(id, t.element, subst);
   if (t.kind === "TTuple") return t.elements.some((el) => occursIn(id, el, subst));
-  if (t.kind === "TResult") return occursIn(id, t.ok, subst);
-  if (t.kind === "TTag") return t.args.some((a) => occursIn(id, a, subst));
+  if (t.kind === "TUnion") return t.args.some((a) => occursIn(id, a, subst));
   if (t.kind === "TRecord") {
     return (
       [...t.fields.values()].some((v) => occursIn(id, v, subst)) ||
       (t.rest !== null && occursIn(id, t.rest, subst))
     );
   }
+  if (t.kind === "TParam") return false;
   return false;
 }
 
@@ -138,7 +134,7 @@ export function applySubst(subst: Substitution, t: Type): Type {
       fields: new Map([...t.fields.entries()].map(([k, v]) => [k, applySubst(subst, v)])),
       rest: t.rest ? applySubst(subst, t.rest) : null,
     };
-    case "TResult": return { kind: "TResult", ok: applySubst(subst, t.ok) };
-    case "TTag": return { kind: "TTag", tag: t.tag, args: t.args.map((a) => applySubst(subst, a)) };
+    case "TUnion": return { kind: "TUnion", name: t.name, args: t.args.map((a) => applySubst(subst, a)) };
+    case "TParam": return t;
   }
 }

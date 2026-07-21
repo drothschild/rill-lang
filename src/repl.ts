@@ -1,11 +1,13 @@
 import { lex } from "./lexer";
-import { parse } from "./parser";
+import { parse, parseProgram } from "./parser";
 import { evaluate } from "./evaluator";
 import { infer } from "./typechecker";
 import { prettyPrint, Value } from "./values";
 import { prettyType, Type, resetTypeVarCounter } from "./types";
 import { createPrelude } from "./prelude";
 import { TokenKind } from "./token";
+import { buildDeclEnv, createPreludeDeclEnv, DeclEnv, resolveTypeAnn } from "./decls";
+import { RillError } from "./errors";
 
 interface ReplResult {
   output?: string;
@@ -15,10 +17,12 @@ interface ReplResult {
 export class ReplSession {
   private valueEnv: Map<string, Value>;
   private typeEnv: Map<string, { vars: number[]; type: Type }>;
+  private declEnv: DeclEnv;
 
   constructor() {
     this.valueEnv = createPrelude();
     this.typeEnv = new Map();
+    this.declEnv = createPreludeDeclEnv();
   }
 
   eval(input: string): ReplResult {
@@ -28,8 +32,14 @@ export class ReplSession {
     if (trimmed.startsWith(":")) return this.handleCommand(trimmed);
 
     try {
-      // Check if this is a top-level let binding (without `in`)
       const tokens = lex(trimmed);
+
+      // Check if this is a type or alias declaration
+      if (tokens.length > 0 && (tokens[0].kind === TokenKind.Type || tokens[0].kind === TokenKind.Alias)) {
+        return this.handleDeclaration(trimmed, tokens);
+      }
+
+      // Check if this is a top-level let binding (without `in`)
       if (tokens.length > 0 && tokens[0].kind === TokenKind.Let) {
         return this.handleLetBinding(trimmed, tokens);
       }
@@ -39,7 +49,7 @@ export class ReplSession {
       // Type check (best-effort — skip if bindings are missing from type env)
       try {
         resetTypeVarCounter();
-        infer(ast, new Map(this.typeEnv), trimmed);
+        infer(ast, new Map(this.typeEnv), trimmed, this.declEnv);
       } catch (e: any) {
         // If it's a real type error (not just missing binding), report it
         if (e.message && !e.message.startsWith("Undefined variable")) {
@@ -53,13 +63,47 @@ export class ReplSession {
     }
   }
 
+  private handleDeclaration(input: string, tokens: import("./token").Token[]): ReplResult {
+    try {
+      // Parse the declaration with a dummy body so parseProgram works
+      const dummyBody = "1";
+      const augmented = `${input}\n${dummyBody}`;
+      const program = parseProgram(lex(augmented));
+
+      // Check if program has imports (not allowed in REPL without resolver context)
+      if (program.imports.length > 0) {
+        return { error: "imports are not allowed in the REPL; use a file instead" };
+      }
+
+      // Extract the declaration
+      if (program.declarations.length === 0) {
+        return { error: "No declaration found" };
+      }
+
+      // Build a new declaration environment with the new declaration
+      try {
+        this.declEnv = buildDeclEnv(program.declarations, this.declEnv);
+      } catch (e: any) {
+        if (e instanceof RillError) {
+          return { error: e.message };
+        }
+        throw e;
+      }
+
+      // Declarations don't produce output in the REPL
+      return {};
+    } catch (e: any) {
+      return { error: e.message };
+    }
+  }
+
   private handleLetBinding(input: string, tokens: import("./token").Token[]): ReplResult {
     // Check if there's an `in` keyword — if so, treat as normal expression
     const hasIn = tokens.some(t => t.kind === TokenKind.In);
     if (hasIn) {
       const ast = parse(tokens);
       resetTypeVarCounter();
-      infer(ast, undefined, input);
+      infer(ast, undefined, input, this.declEnv);
       const result = evaluate(ast, new Map(this.valueEnv));
       return { output: prettyPrint(result) };
     }
@@ -78,7 +122,7 @@ export class ReplSession {
     const augmented = `${input} in ${name}`;
     const ast = parse(lex(augmented));
     resetTypeVarCounter();
-    const type = infer(ast, undefined, augmented);
+    const type = infer(ast, undefined, augmented, this.declEnv);
     const result = evaluate(ast, new Map(this.valueEnv));
 
     this.valueEnv.set(name, result);

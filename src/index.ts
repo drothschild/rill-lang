@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import * as fs from "node:fs";
+import * as path from "node:path";
 import * as readline from "node:readline";
 import { ReplSession } from "./repl";
-import { runSource } from "./runner";
+import { runSource, createFsResolver } from "./runner";
 
 const args = process.argv.slice(2);
 
@@ -11,7 +12,12 @@ if (args[0] === "run" && args[1]) {
   const filePath = args[1];
   try {
     const source = fs.readFileSync(filePath, "utf-8");
-    const result = runSource(source);
+    const fileDir = path.dirname(path.resolve(filePath));
+    const resolver = createFsResolver(fileDir);
+    const result = runSource(source, {
+      resolve: resolver,
+      path: filePath,
+    });
     if (result.error) {
       console.error(result.error);
       process.exit(1);

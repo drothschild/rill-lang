@@ -3,6 +3,7 @@ import { Type, freshTypeVar, prettyType } from "./types";
 import { Substitution, unify, applySubst } from "./unify";
 import { RillError } from "./errors";
 import { Span } from "./span";
+import { DeclEnv, createPreludeDeclEnv, instantiateCtor, suggestName } from "./decls";
 
 // A type scheme: forall quantifiedVars . type
 interface Scheme {
@@ -29,8 +30,8 @@ function freeVars(t: Type): Set<number> {
       if (t.rest) s = union(s, freeVars(t.rest));
       return s;
     }
-    case "TResult": return freeVars(t.ok);
-    case "TTag": return t.args.reduce((s, a) => union(s, freeVars(a)), new Set<number>());
+    case "TUnion": return t.args.reduce((s, a) => union(s, freeVars(a)), new Set<number>());
+    case "TParam": return new Set();
   }
 }
 
@@ -83,8 +84,8 @@ function substituteVars(mapping: Map<number, Type>, t: Type): Type {
       fields: new Map([...t.fields.entries()].map(([k, v]) => [k, substituteVars(mapping, v)])),
       rest: t.rest ? substituteVars(mapping, t.rest) : null,
     };
-    case "TResult": return { kind: "TResult", ok: substituteVars(mapping, t.ok) };
-    case "TTag": return { kind: "TTag", tag: t.tag, args: t.args.map(a => substituteVars(mapping, a)) };
+    case "TUnion": return { kind: "TUnion", name: t.name, args: t.args.map(a => substituteVars(mapping, a)) };
+    case "TParam": return t;
   }
 }
 
@@ -97,17 +98,41 @@ function applySubstEnv(subst: Substitution, env: TypeEnv): TypeEnv {
 }
 
 let _source: string | undefined;
+let _importAliases: Map<string, string> | undefined;  // alias -> modulePath
+let _moduleExports: Map<string, Map<string, Scheme>> | undefined;  // modulePath -> name -> Scheme
 
 function typeError(msg: string, span: Span): Error {
   if (_source) return new RillError(msg, span, _source);
   return new TypeError(msg);
 }
 
-export function infer(expr: Expr, env?: TypeEnv, source?: string): Type {
+export function infer(
+  expr: Expr,
+  env?: TypeEnv,
+  source?: string,
+  declEnv?: DeclEnv,
+  importAliases?: Map<string, string>,
+  moduleExports?: Map<string, Map<string, Scheme>>
+): Type {
+  // Save prior state for re-entrancy
+  const savedSource = _source;
+  const savedImportAliases = _importAliases;
+  const savedModuleExports = _moduleExports;
+
   _source = source;
-  const defaultEnv: TypeEnv = env ?? new Map();
-  const [type, subst] = inferExpr(expr, defaultEnv, new Map());
-  return applySubst(subst, type);
+  _importAliases = importAliases;
+  _moduleExports = moduleExports;
+  try {
+    const defaultEnv: TypeEnv = env ?? new Map();
+    const defaultDeclEnv: DeclEnv = declEnv ?? createPreludeDeclEnv();
+    const [type, subst] = inferExpr(expr, defaultEnv, new Map(), defaultDeclEnv);
+    return applySubst(subst, type);
+  } finally {
+    // Restore prior state
+    _source = savedSource;
+    _importAliases = savedImportAliases;
+    _moduleExports = savedModuleExports;
+  }
 }
 
 function withSpan<T>(fn: () => T, span: Span): T {
@@ -121,7 +146,7 @@ function withSpan<T>(fn: () => T, span: Span): T {
   }
 }
 
-function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substitution] {
+function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution, declEnv: DeclEnv): [Type, Substitution] {
   switch (expr.kind) {
     case "IntLit": return [{ kind: "TCon", name: "Int" }, subst];
     case "FloatLit": return [{ kind: "TCon", name: "Float" }, subst];
@@ -136,13 +161,13 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
     }
 
     case "BinOp": {
-      const [leftT, s1] = inferExpr(expr.left, env, subst);
-      const [rightT, s2] = inferExpr(expr.right, env, s1);
+      const [leftT, s1] = inferExpr(expr.left, env, subst, declEnv);
+      const [rightT, s2] = inferExpr(expr.right, env, s1, declEnv);
       return withSpan(() => inferBinOp(expr.op, leftT, rightT, s2), expr.span);
     }
 
     case "UnaryOp": {
-      const [operandT, s1] = inferExpr(expr.expr, env, subst);
+      const [operandT, s1] = inferExpr(expr.expr, env, subst, declEnv);
       if (expr.op === "!") {
         const s2 = unify(operandT, { kind: "TCon", name: "Bool" }, s1);
         return [{ kind: "TCon", name: "Bool" }, s2];
@@ -162,34 +187,34 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
     }
 
     case "Let": {
-      const [valT, s1] = inferExpr(expr.value, env, subst);
+      const [valT, s1] = inferExpr(expr.value, env, subst, declEnv);
       const scheme = expr.rec ? mono(valT) : generalize(env, valT, s1);
       const newEnv = new Map(env);
       newEnv.set(expr.name, scheme);
-      return inferExpr(expr.body, newEnv, s1);
+      return inferExpr(expr.body, newEnv, s1, declEnv);
     }
 
     case "Fn": {
       const paramT = freshTypeVar();
       const newEnv = new Map(env);
       newEnv.set(expr.param, mono(paramT));
-      const [bodyT, s1] = inferExpr(expr.body, newEnv, subst);
+      const [bodyT, s1] = inferExpr(expr.body, newEnv, subst, declEnv);
       return [{ kind: "TFn", param: applySubst(s1, paramT), ret: bodyT }, s1];
     }
 
     case "Call": {
-      const [fnT, s1] = inferExpr(expr.fn, env, subst);
-      const [argT, s2] = inferExpr(expr.arg, env, s1);
+      const [fnT, s1] = inferExpr(expr.fn, env, subst, declEnv);
+      const [argT, s2] = inferExpr(expr.arg, env, s1, declEnv);
       const retT = freshTypeVar();
       const s3 = withSpan(() => unify(applySubst(s2, fnT), { kind: "TFn", param: argT, ret: retT }, s2), expr.span);
       return [applySubst(s3, retT), s3];
     }
 
     case "If": {
-      const [condT, s1] = inferExpr(expr.cond, env, subst);
+      const [condT, s1] = inferExpr(expr.cond, env, subst, declEnv);
       const s2 = unify(condT, { kind: "TCon", name: "Bool" }, s1);
-      const [thenT, s3] = inferExpr(expr.then, env, s2);
-      const [elseT, s4] = inferExpr(expr.else_, env, s3);
+      const [thenT, s3] = inferExpr(expr.then, env, s2, declEnv);
+      const [elseT, s4] = inferExpr(expr.else_, env, s3, declEnv);
       const s5 = unify(thenT, elseT, s4);
       return [applySubst(s5, thenT), s5];
     }
@@ -199,10 +224,10 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
         return [{ kind: "TList", element: freshTypeVar() }, subst];
       }
       let s = subst;
-      const [firstT, s1] = inferExpr(expr.elements[0], env, s);
+      const [firstT, s1] = inferExpr(expr.elements[0], env, s, declEnv);
       s = s1;
       for (let i = 1; i < expr.elements.length; i++) {
-        const [elT, si] = inferExpr(expr.elements[i], env, s);
+        const [elT, si] = inferExpr(expr.elements[i], env, s, declEnv);
         s = unify(firstT, elT, si);
       }
       return [{ kind: "TList", element: applySubst(s, firstT) }, s];
@@ -212,7 +237,7 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
       let s = subst;
       const types: Type[] = [];
       for (const el of expr.elements) {
-        const [t, si] = inferExpr(el, env, s);
+        const [t, si] = inferExpr(el, env, s, declEnv);
         types.push(t);
         s = si;
       }
@@ -223,15 +248,76 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
       let s = subst;
       const fields = new Map<string, Type>();
       for (const f of expr.fields) {
-        const [t, si] = inferExpr(f.value, env, s);
+        const [t, si] = inferExpr(f.value, env, s, declEnv);
         fields.set(f.name, t);
         s = si;
       }
       return [{ kind: "TRecord", fields, rest: null }, s];
     }
 
+    case "RecordUpdate": {
+      // 1. Look up base identifier's type
+      const scheme = env.get(expr.base);
+      if (!scheme) {
+        throw typeError(`Undefined identifier: ${expr.base}`, expr.baseSpan);
+      }
+      const baseT = instantiate(scheme);
+
+      // 2. For each updated field, create a fresh var and build constraint record
+      const constraintFields = new Map<string, Type>();
+      for (const field of expr.fields) {
+        constraintFields.set(field.name, freshTypeVar());
+      }
+      const constraintRecord: Type = {
+        kind: "TRecord",
+        fields: constraintFields,
+        rest: freshTypeVar(),
+      };
+
+      // Unify base type with constraint record
+      let s = unify(baseT, constraintRecord, subst);
+      const baseResolved = applySubst(s, baseT);
+
+      // 3. Infer each value and unify with corresponding field type
+      for (const field of expr.fields) {
+        const [valueT, si] = inferExpr(field.value, env, s, declEnv);
+        if (baseResolved.kind === "TRecord") {
+          const fieldT = baseResolved.fields.get(field.name);
+          if (fieldT) {
+            s = unify(valueT, fieldT, si);
+          }
+        } else {
+          s = si;
+        }
+      }
+
+      // 4. Return base type after substitution
+      return [applySubst(s, baseT), s];
+    }
+
     case "FieldAccess": {
-      const [recT, s1] = inferExpr(expr.expr, env, subst);
+      // Check if this is a module qualified access (alias.name)
+      if (expr.expr.kind === "Ident" && _importAliases && _moduleExports) {
+        const alias = expr.expr.name;
+        const modulePath = _importAliases.get(alias);
+        if (modulePath) {
+          const moduleSchemes = _moduleExports.get(modulePath);
+          if (moduleSchemes) {
+            const scheme = moduleSchemes.get(expr.field);
+            if (scheme) {
+              return [instantiate(scheme), subst];
+            }
+            // Unknown export - list available exports
+            const availableExports = Array.from(moduleSchemes.keys()).join(", ");
+            throw typeError(
+              `Unknown export "${expr.field}" from module "${modulePath}". Available exports: ${availableExports}`,
+              expr.span
+            );
+          }
+        }
+      }
+
+      const [recT, s1] = inferExpr(expr.expr, env, subst, declEnv);
       const resolved = applySubst(s1, recT);
       if (resolved.kind === "TRecord") {
         const fieldT = resolved.fields.get(expr.field);
@@ -268,77 +354,115 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
       let s = subst;
       const argTypes: Type[] = [];
       for (const a of expr.args) {
-        const [t, si] = inferExpr(a, env, s);
+        const [t, si] = inferExpr(a, env, s, declEnv);
         argTypes.push(t);
         s = si;
       }
-      if (expr.tag === "Ok" && argTypes.length === 1) {
-        return [{ kind: "TResult", ok: argTypes[0] }, s];
+
+      // Look up constructor in declEnv
+      const ctorInfo = declEnv.ctors.get(expr.tag);
+      if (!ctorInfo) {
+        // Unknown constructor - error with did-you-mean
+        const suggestion = suggestName(expr.tag, declEnv.ctors.keys());
+        const suggestionText = suggestion ? ` (did you mean ${suggestion}?)` : "";
+        throw typeError(`Unknown constructor: ${expr.tag}${suggestionText}`, expr.span);
       }
-      if (expr.tag === "Err" && argTypes.length === 1) {
-        return [{ kind: "TResult", ok: freshTypeVar() }, s];
+
+      // Instantiate the constructor
+      const { unionType, payload } = instantiateCtor(ctorInfo, declEnv);
+
+      // Check arity
+      const expectedArity = payload === null ? 0 : 1;
+      if (argTypes.length !== expectedArity) {
+        throw typeError(
+          `Constructor ${expr.tag} expects ${expectedArity} arguments, got ${argTypes.length}`,
+          expr.span
+        );
       }
-      return [{ kind: "TTag", tag: expr.tag, args: argTypes }, s];
+
+      // Unify argument type with payload if needed
+      if (payload !== null && argTypes.length === 1) {
+        s = unify(argTypes[0], payload, s);
+      }
+
+      return [unionType, s];
     }
 
     case "Pipe": {
       // a |> f desugars to f(a) for type checking
-      const [leftT, s1] = inferExpr(expr.left, env, subst);
+      const [leftT, s1] = inferExpr(expr.left, env, subst, declEnv);
       if (expr.right.kind === "Catch") {
         // catch unwraps Result: if leftT is Result(T), return T unified with fallback
         const okT = freshTypeVar();
-        const s2 = unify(applySubst(s1, leftT), { kind: "TResult", ok: okT }, s1);
+        const resultType: Type = { kind: "TUnion", name: "Result", args: [okT] };
+        const s2 = unify(applySubst(s1, leftT), resultType, s1);
         const catchEnv = new Map(env);
         catchEnv.set(expr.right.errorName, mono({ kind: "TCon", name: "String" }));
-        const [fallbackT, s3] = inferExpr(expr.right.fallback, catchEnv, s2);
+        const [fallbackT, s3] = inferExpr(expr.right.fallback, catchEnv, s2, declEnv);
         const s4 = unify(applySubst(s3, okT), fallbackT, s3);
         return [applySubst(s4, okT), s4];
       }
       // Special handling: if right side is Try, apply inner fn first then try
       if (expr.right.kind === "Try") {
-        const [fnT, s2] = inferExpr(expr.right.expr, env, s1);
+        const [fnT, s2] = inferExpr(expr.right.expr, env, s1, declEnv);
         const callRetT = freshTypeVar();
         const s3 = unify(applySubst(s2, fnT), { kind: "TFn", param: applySubst(s2, leftT), ret: callRetT }, s2);
         const okT = freshTypeVar();
-        const s4 = unify(applySubst(s3, callRetT), { kind: "TResult", ok: okT }, s3);
+        const resultType: Type = { kind: "TUnion", name: "Result", args: [okT] };
+        const s4 = unify(applySubst(s3, callRetT), resultType, s3);
         return [applySubst(s4, okT), s4];
       }
-      const [rightT, s2] = inferExpr(expr.right, env, s1);
+      const [rightT, s2] = inferExpr(expr.right, env, s1, declEnv);
       const retT = freshTypeVar();
       const s3 = unify(applySubst(s2, rightT), { kind: "TFn", param: applySubst(s2, leftT), ret: retT }, s2);
       return [applySubst(s3, retT), s3];
     }
 
     case "Match": {
-      const [subjT, s1] = inferExpr(expr.subject, env, subst);
+      const [subjT, s1] = inferExpr(expr.subject, env, subst, declEnv);
       let s = s1;
       const retT = freshTypeVar();
       for (const c of expr.cases) {
-        const [patT, patBindings, s2] = inferPattern(c.pattern, s);
-        // Skip subject-pattern unification for tag patterns (no sum types in v1)
-        if (patT.kind === "TTag") {
-          s = s2;
-        } else {
-          try {
-            s = unify(applySubst(s2, subjT), patT, s2);
-          } catch {
-            s = s2;
-          }
+        const [patT, patBindings, s2] = inferPattern(c.pattern, s, declEnv);
+        // Unify subject with pattern type — errors are source-located at the match expression
+        try {
+          s = unify(applySubst(s2, subjT), patT, s2);
+        } catch (e: any) {
+          const err = e instanceof RillError ? e : new RillError(e.message, expr.span, _source);
+          throw err;
         }
         const matchEnv = new Map(env);
         for (const [k, t] of patBindings) matchEnv.set(k, mono(t));
-        const [bodyT, s3] = inferExpr(c.body, matchEnv, s);
+        // If guard exists, typecheck it in the extended environment and ensure it's Bool
+        if (c.guard) {
+          const [guardT, s3] = inferExpr(c.guard, matchEnv, s, declEnv);
+          const boolT: Type = { kind: "TCon", name: "Bool" };
+          try {
+            s = unify(applySubst(s3, guardT), boolT, s3);
+          } catch {
+            const guardTResolved = applySubst(s3, guardT);
+            throw typeError(
+              `Guard must be Bool, but got ${prettyType(guardTResolved)}`,
+              c.guard.span
+            );
+          }
+        }
+        const [bodyT, s3] = inferExpr(c.body, matchEnv, s, declEnv);
         s = unify(retT, bodyT, s3);
       }
+      // Check exhaustiveness after processing all cases
+      const resolvedSubjT = applySubst(s, subjT);
+      checkExhaustiveness(resolvedSubjT, expr.cases, declEnv, expr.span);
       return [applySubst(s, retT), s];
     }
 
     case "Try": {
-      const [exprT, s1] = inferExpr(expr.expr, env, subst);
+      const [exprT, s1] = inferExpr(expr.expr, env, subst, declEnv);
       const okT = freshTypeVar();
+      const resultType: Type = { kind: "TUnion", name: "Result", args: [okT] };
       const resolvedExprT = applySubst(s1, exprT);
       try {
-        const s2 = unify(resolvedExprT, { kind: "TResult", ok: okT }, s1);
+        const s2 = unify(resolvedExprT, resultType, s1);
         return [applySubst(s2, okT), s2];
       } catch {
         throw typeError(`The ? operator requires a Result type, but got ${prettyType(resolvedExprT)}`, expr.span);
@@ -346,10 +470,10 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
     }
 
     case "Catch": {
-      const [exprT, s1] = inferExpr(expr.expr, env, subst);
+      const [exprT, s1] = inferExpr(expr.expr, env, subst, declEnv);
       const newEnv = new Map(env);
       newEnv.set(expr.errorName, mono({ kind: "TCon", name: "String" }));
-      const [fallbackT, s2] = inferExpr(expr.fallback, newEnv, s1);
+      const [fallbackT, s2] = inferExpr(expr.fallback, newEnv, s1, declEnv);
       // Result: either the ok type or the fallback type
       return [fallbackT, s2];
     }
@@ -367,15 +491,15 @@ function containsFnType(t: Type): boolean {
   switch (t.kind) {
     case "TFn": return true;
     case "TVar":
-    case "TCon": return false;
+    case "TCon":
+    case "TParam": return false;
     case "TList": return containsFnType(t.element);
     case "TTuple": return t.elements.some(containsFnType);
     case "TRecord": {
       for (const v of t.fields.values()) if (containsFnType(v)) return true;
       return t.rest ? containsFnType(t.rest) : false;
     }
-    case "TResult": return containsFnType(t.ok);
-    case "TTag": return t.args.some(containsFnType);
+    case "TUnion": return t.args.some(containsFnType);
   }
 }
 
@@ -444,7 +568,120 @@ function inferBinOp(op: string, leftT: Type, rightT: Type, subst: Substitution):
   throw new TypeError(`Unknown operator: ${op}`);
 }
 
-function inferPattern(pattern: import("./ast").Pattern, subst: Substitution): [Type, Map<string, Type>, Substitution] {
+function isIrrefutablePattern(pattern: import("./ast").Pattern): boolean {
+  switch (pattern.kind) {
+    case "WildcardPat":
+    case "IdentPat":
+      return true;
+    case "TagPat":
+      // Nested TagPat is refutable (per phase spec: "nested TagPat" is refutable)
+      return false;
+    case "TuplePat":
+      // TuplePat is irrefutable only if all elements are irrefutable
+      return pattern.elements.every(isIrrefutablePattern);
+    case "RecordPat":
+      // RecordPat is irrefutable only if all fields are irrefutable
+      return pattern.fields.every(f => isIrrefutablePattern(f.pattern));
+    case "IntPat":
+    case "FloatPat":
+    case "StringPat":
+    case "BoolPat":
+      return false;
+  }
+}
+
+function checkExhaustiveness(
+  subjectType: Type,
+  cases: import("./ast").MatchCase[],
+  declEnv: DeclEnv,
+  span: Span
+): void {
+  // Rule 1: Any unguarded wildcard or ident arm covers everything
+  for (const c of cases) {
+    if (!c.guard) {
+      if (c.pattern.kind === "WildcardPat" || c.pattern.kind === "IdentPat") {
+        return; // Exhaustive
+      }
+    }
+  }
+
+  // Rule 2: Declared union subject
+  if (subjectType.kind === "TUnion") {
+    const unionDecl = declEnv.unions.get(subjectType.name);
+    if (!unionDecl) {
+      throw new TypeError(`Unknown union type: ${subjectType.name}`);
+    }
+
+    const ctorsInDecl = unionDecl.ctors;
+    const coveredCtors = new Set<string>();
+
+    for (const c of cases) {
+      if (c.guard) {
+        // Rule 5: Guarded arms never count toward coverage
+        continue;
+      }
+      if (c.pattern.kind === "TagPat") {
+        // Check if the payload sub-pattern (if any) is irrefutable
+        if (c.pattern.args.length === 0) {
+          // Payload-less: always irrefutable
+          coveredCtors.add(c.pattern.tag);
+        } else if (c.pattern.args.length === 1 && isIrrefutablePattern(c.pattern.args[0])) {
+          // Has irrefutable sub-pattern: covers
+          coveredCtors.add(c.pattern.tag);
+        }
+        // If has refutable sub-pattern: conservative rule, does NOT count
+      }
+    }
+
+    const missing: string[] = [];
+    for (const ctor of ctorsInDecl) {
+      if (!coveredCtors.has(ctor)) {
+        missing.push(ctor);
+      }
+    }
+
+    if (missing.length > 0) {
+      const missingText = missing.map(c => {
+        // Check if ctor needs a payload marker
+        const ctorInfo = declEnv.ctors.get(c);
+        const needsPayload = ctorInfo && ctorInfo.payload !== null;
+        return needsPayload ? `${c}(_)` : c;
+      });
+      throw typeError(
+        `This match does not cover all possible values of ${subjectType.name}.\nMissing patterns:\n${missingText.map(m => `  - ${m}`).join("\n")}`,
+        span
+      );
+    }
+    return;
+  }
+
+  // Rule 3: Bool subject
+  if (subjectType.kind === "TCon" && subjectType.name === "Bool") {
+    const hasTrueArm = cases.some(c => !c.guard && c.pattern.kind === "BoolPat" && c.pattern.value === true);
+    const hasFalseArm = cases.some(c => !c.guard && c.pattern.kind === "BoolPat" && c.pattern.value === false);
+
+    if (!hasTrueArm || !hasFalseArm) {
+      const missing: string[] = [];
+      if (!hasTrueArm) missing.push("true");
+      if (!hasFalseArm) missing.push("false");
+      throw typeError(
+        `This match does not cover all possible values of Bool.\nMissing patterns:\n${missing.map(m => `  - ${m}`).join("\n")}`,
+        span
+      );
+    }
+    return;
+  }
+
+  // Rule 4: Other types require catch-all
+  // Only allow exhaustive if there's a wildcard or ident (already checked in rule 1)
+  // For unresolved type variables (TVar), also require catch-all
+  throw typeError(
+    `This match requires a catch-all arm (${subjectType.kind === "TVar" ? "unresolved type" : "non-union subject type"}). Use _ to match any value.`,
+    span
+  );
+}
+
+function inferPattern(pattern: import("./ast").Pattern, subst: Substitution, declEnv: DeclEnv): [Type, Map<string, Type>, Substitution] {
   switch (pattern.kind) {
     case "IntPat": return [{ kind: "TCon", name: "Int" }, new Map(), subst];
     case "FloatPat": return [{ kind: "TCon", name: "Float" }, new Map(), subst];
@@ -456,29 +693,44 @@ function inferPattern(pattern: import("./ast").Pattern, subst: Substitution): [T
       return [t, new Map([[pattern.name, t]]), subst];
     }
     case "TagPat": {
+      // Look up constructor in declEnv
+      const ctorInfo = declEnv.ctors.get(pattern.tag);
+      if (!ctorInfo) {
+        // Unknown constructor - error with did-you-mean
+        const suggestion = suggestName(pattern.tag, declEnv.ctors.keys());
+        const suggestionText = suggestion ? ` (did you mean ${suggestion}?)` : "";
+        throw new TypeError(`Unknown constructor in pattern: ${pattern.tag}${suggestionText}`);
+      }
+
+      // Instantiate the constructor
+      const { unionType, payload } = instantiateCtor(ctorInfo, declEnv);
+
+      // Check arity
+      const expectedArity = payload === null ? 0 : 1;
+      if (pattern.args.length !== expectedArity) {
+        throw new TypeError(
+          `Constructor ${pattern.tag} expects ${expectedArity} arguments, got ${pattern.args.length}`
+        );
+      }
+
+      // Infer pattern args and bind variables
       let s = subst;
-      const argTypes: Type[] = [];
       const bindings = new Map<string, Type>();
-      for (const arg of pattern.args) {
-        const [t, b, si] = inferPattern(arg, s);
-        argTypes.push(t);
-        for (const [k, v] of b) bindings.set(k, v);
-        s = si;
+      if (pattern.args.length === 1 && payload !== null) {
+        // Infer the single argument pattern against the instantiated payload
+        const [argPatT, argBindings, si] = inferPattern(pattern.args[0], s, declEnv);
+        s = unify(argPatT, payload, si);
+        for (const [k, v] of argBindings) bindings.set(k, v);
       }
-      if (pattern.tag === "Ok" && argTypes.length === 1) {
-        return [{ kind: "TResult", ok: argTypes[0] }, bindings, s];
-      }
-      if (pattern.tag === "Err" && argTypes.length === 1) {
-        return [{ kind: "TResult", ok: freshTypeVar() }, bindings, s];
-      }
-      return [{ kind: "TTag", tag: pattern.tag, args: argTypes }, bindings, s];
+
+      return [unionType, bindings, s];
     }
     case "TuplePat": {
       let s = subst;
       const types: Type[] = [];
       const bindings = new Map<string, Type>();
       for (const el of pattern.elements) {
-        const [t, b, si] = inferPattern(el, s);
+        const [t, b, si] = inferPattern(el, s, declEnv);
         types.push(t);
         for (const [k, v] of b) bindings.set(k, v);
         s = si;
@@ -490,7 +742,7 @@ function inferPattern(pattern: import("./ast").Pattern, subst: Substitution): [T
       const fields = new Map<string, Type>();
       const bindings = new Map<string, Type>();
       for (const f of pattern.fields) {
-        const [t, b, si] = inferPattern(f.pattern, s);
+        const [t, b, si] = inferPattern(f.pattern, s, declEnv);
         fields.set(f.name, t);
         for (const [k, v] of b) bindings.set(k, v);
         s = si;
@@ -506,7 +758,7 @@ export function createPreludeTypeEnv(): TypeEnv {
   const tcon = (name: string): Type => ({ kind: "TCon", name });
   const tlist = (element: Type): Type => ({ kind: "TList", element });
   const ttuple = (...elements: Type[]): Type => ({ kind: "TTuple", elements });
-  const tresult = (ok: Type): Type => ({ kind: "TResult", ok });
+  const tunion = (name: string, args: Type[] = []): Type => ({ kind: "TUnion", name, args });
   // Curried arrow: tfn(A, B, C) === A -> B -> C
   const tfn = (...ts: Type[]): Type =>
     ts.reduceRight((ret, param) => ({ kind: "TFn", param, ret }));
@@ -548,12 +800,12 @@ export function createPreludeTypeEnv(): TypeEnv {
   // head : List(a) -> Result(a)
   {
     const a = freshTypeVar();
-    env.set("head", scheme(tfn(tlist(a), tresult(a))));
+    env.set("head", scheme(tfn(tlist(a), tunion("Result", [a]))));
   }
   // tail : List(a) -> Result(List(a))
   {
     const a = freshTypeVar();
-    env.set("tail", scheme(tfn(tlist(a), tresult(tlist(a)))));
+    env.set("tail", scheme(tfn(tlist(a), tunion("Result", [tlist(a)]))));
   }
   // concat : String -> String -> String
   env.set("concat", scheme(tfn(Str, Str, Str)));
@@ -585,10 +837,30 @@ export function createPreludeTypeEnv(): TypeEnv {
   // lookup : k -> List((k, v)) -> Result(v)
   {
     const k = freshTypeVar(), v = freshTypeVar();
-    env.set("lookup", scheme(tfn(k, tlist(ttuple(k, v)), tresult(v))));
+    env.set("lookup", scheme(tfn(k, tlist(ttuple(k, v)), tunion("Result", [v]))));
   }
   // require : Bool -> String -> Result(Unit)
-  env.set("require", scheme(tfn(Bool, Str, tresult(Unit))));
+  env.set("require", scheme(tfn(Bool, Str, tunion("Result", [Unit]))));
+  // at : Int -> List(a) -> Result(a)
+  {
+    const a = freshTypeVar();
+    env.set("at", scheme(tfn(Int, tlist(a), tunion("Result", [a]))));
+  }
+  // with_default : a -> Option(a) -> a
+  {
+    const a = freshTypeVar();
+    env.set("with_default", scheme(tfn(a, tunion("Option", [a]), a)));
+  }
+  // map_option : (a -> b) -> Option(a) -> Option(b)
+  {
+    const a = freshTypeVar(), b = freshTypeVar();
+    env.set("map_option", scheme(tfn(tfn(a, b), tunion("Option", [a]), tunion("Option", [b]))));
+  }
+  // append : List(a) -> List(a) -> List(a)
+  {
+    const a = freshTypeVar();
+    env.set("append", scheme(tfn(tlist(a), tlist(a), tlist(a))));
+  }
 
   return env;
 }
@@ -600,4 +872,53 @@ export function bindType(env: TypeEnv, name: string, t: Type): TypeEnv {
   const next = new Map(env);
   next.set(name, mono(t));
   return next;
+}
+
+// Helper to extract and infer top-level let bindings from an expression.
+// Returns a map of name -> (scheme, remaining body expression).
+// Used by module graph checking to infer let schemes in order.
+export function inferTopLevelLets(
+  expr: Expr,
+  env: TypeEnv,
+  source: string,
+  declEnv: DeclEnv,
+  importAliases?: Map<string, string>,
+  moduleExports?: Map<string, Map<string, Scheme>>
+): Map<string, Scheme> {
+  // Save prior state for re-entrancy
+  const savedSource = _source;
+  const savedImportAliases = _importAliases;
+  const savedModuleExports = _moduleExports;
+
+  _source = source;
+  _importAliases = importAliases;
+  _moduleExports = moduleExports;
+  const schemes = new Map<string, Scheme>();
+  let current = expr;
+  let currentEnv = env;
+  let subst = new Map<number, Type>();
+
+  try {
+    while (current.kind === "Let") {
+      const [valT, s1] = inferExpr(current.value, currentEnv, subst, declEnv);
+      const scheme = current.rec ? mono(valT) : generalize(currentEnv, valT, s1);
+      schemes.set(current.name, scheme);
+
+      // Add to env for subsequent lets
+      currentEnv = new Map(currentEnv);
+      currentEnv.set(current.name, scheme);
+      subst = s1;
+      current = current.body;
+    }
+
+    // Also infer the remaining body to catch type errors
+    inferExpr(current, currentEnv, subst, declEnv);
+  } finally {
+    // Restore prior state
+    _source = savedSource;
+    _importAliases = savedImportAliases;
+    _moduleExports = savedModuleExports;
+  }
+
+  return schemes;
 }

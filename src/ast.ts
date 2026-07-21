@@ -1,4 +1,38 @@
 import { Span } from "./span";
+import { Type } from "./types";
+
+// ── Declarations ─────────────────────────────────────────
+
+export interface ConstructorDef {
+  name: string;
+  payload: Type | null;
+  span: Span;
+}
+
+export interface TypeDecl {
+  kind: "TypeDecl";
+  name: string;
+  params: string[];
+  constructors: ConstructorDef[];
+  span: Span;
+}
+
+export interface AliasDecl {
+  kind: "AliasDecl";
+  name: string;
+  params: string[];
+  type: Type;
+  span: Span;
+}
+
+export interface ImportDecl {
+  kind: "ImportDecl";
+  path: string;
+  alias: string;
+  span: Span;
+}
+
+export type Declaration = TypeDecl | AliasDecl;
 
 // ── Expressions ──────────────────────────────────────────
 
@@ -22,6 +56,7 @@ export type Expr =
   | List
   | Tuple
   | Record
+  | RecordUpdate
   | FieldAccess
   | Tag;
 
@@ -100,6 +135,7 @@ export interface Match {
 
 export interface MatchCase {
   pattern: Pattern;
+  guard?: Expr;
   body: Expr;
 }
 
@@ -125,6 +161,14 @@ export interface Tuple {
 
 export interface Record {
   kind: "Record";
+  fields: { name: string; value: Expr }[];
+  span: Span;
+}
+
+export interface RecordUpdate {
+  kind: "RecordUpdate";
+  base: string;
+  baseSpan: Span;
   fields: { name: string; value: Expr }[];
   span: Span;
 }

@@ -103,7 +103,7 @@ describe("End-to-end: Rill programs", () => {
     expect(logs).toContain("(2 + 3) * -(4) = -20");
     expect(logs).toContain("10 / 0 = Error: division by zero");
     expect(logs).toContain("10 / 3 = 3");
-    expect(logs).toContain("unknown = Error: unknown expression");
+    expect(logs).toContain("unknown = Error: unsupported expression (type-checked at load time)");
     expect(logs).toContain("=== Done! ===");
   });
 
@@ -200,5 +200,72 @@ describe("End-to-end: Rill programs", () => {
     expect(logs).toContain("After completing 'Write a demo':");
     expect(logs).toContain("[x] Write a demo");
     expect(logs).toContain("=== Done! ===");
+  });
+
+  it("at with ? and pipe composition", () => {
+    const result = runSource(`
+      [10, 20, 30]
+      |> at(1)?
+      |> fn x -> x + 5
+    `);
+    expect(result.output).toBe("25");
+  });
+
+  it("at with out-of-bounds error in pipe", () => {
+    const result = runSource(`
+      [10, 20, 30]
+      |> at(5)?
+      |> fn x -> x + 5
+      |> catch e -> 0
+    `);
+    expect(result.output).toBe("0");
+  });
+
+  it("with_default in pipeline", () => {
+    const result = runSource(`
+      Some(42)
+      |> with_default(0)
+      |> fn x -> x * 2
+    `);
+    expect(result.output).toBe("84");
+  });
+
+  it("with_default handles None", () => {
+    const result = runSource(`
+      None
+      |> with_default(5)
+      |> fn x -> x + 10
+    `);
+    expect(result.output).toBe("15");
+  });
+
+  it("map_option in pipeline", () => {
+    const result = runSource(`
+      Some(5)
+      |> map_option(fn x -> x * 2)
+      |> map_option(fn x -> x + 1)
+      |> with_default(0)
+    `);
+    expect(result.output).toBe("11");
+  });
+
+  it("map_option with None passes through", () => {
+    const result = runSource(`
+      None
+      |> map_option(fn x -> x * 2)
+      |> with_default(99)
+    `);
+    expect(result.output).toBe("99");
+  });
+
+  it("at returns error message for out of bounds", () => {
+    const result = runSource(`
+      let result = at(10, [1, 2, 3]) in
+      match result {
+        Ok(x) -> x,
+        Err(msg) -> 0
+      }
+    `);
+    expect(result.output).toBe("0");
   });
 });

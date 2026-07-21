@@ -1,52 +1,56 @@
 -- Markdown Renderer
--- A mini markdown renderer that builds a document AST from tagged values
--- and recursively renders it to formatted text
--- Showcases tagged values as AST, pattern matching, and list processing
+-- A markdown renderer that builds a document AST from declared node types
+-- Showcases exhaustive pattern matching on declared AST union and error handling
 
--- AST node types:
--- H1(text), H2(text), H3(text) — headers
--- Bold(text), Italic(text)     — inline formatting
--- Text(text)                   — plain text
--- BulletList(items)            — unordered list (list of strings)
--- NumberedList(items)          — ordered list (list of strings)
+-- Declared AST node union: every constructor must be handled in match
+type ASTNode =
+  | H1({ text: String })
+  | H2({ text: String })
+  | H3({ text: String })
+  | Text({ text: String })
+  | BulletList({ items: List(String) })
+  | NumberedList({ items: List(String) })
+  | Bold({ text: String })
+  | Italic({ text: String })
 
 -- Render inline formatting to a string
-let inline = fn(node) ->
+let format_inline = fn(node) ->
   match node {
-    Bold(text) -> "**" ++ text ++ "**",
-    Italic(text) -> "*" ++ text ++ "*",
-    _ -> to_string(node)
+    Bold(p) -> "**" ++ p.text ++ "**",
+    Italic(p) -> "*" ++ p.text ++ "*",
+    _ -> "unsupported inline"
   }
 
 -- Render a numbered list: fold to track the index
 let render_numbered = fn(items) ->
   (fold(1, fn(n, item) -> (let _ = print(to_string(n) ++ ". " ++ item) n + 1), items))
 
--- Render a block-level node, returning Ok/Err for error handling
+-- Render a block-level node (exhaustive match on declared union)
 let render = fn(node) ->
   match node {
-    H1(text) -> (let _ = print("# " ++ text) Ok(())),
-    H2(text) -> (let _ = print("## " ++ text) Ok(())),
-    H3(text) -> (let _ = print("### " ++ text) Ok(())),
-    Text(text) -> (let _ = print(text) Ok(())),
-    BulletList(items) -> (let _ = each(fn(item) -> print("- " ++ item), items) Ok(())),
-    NumberedList(items) -> (let _ = render_numbered(items) Ok(())),
-    _ -> Err("unrecognized node")
+    H1(p) -> (let _ = print("# " ++ p.text) Ok(())),
+    H2(p) -> (let _ = print("## " ++ p.text) Ok(())),
+    H3(p) -> (let _ = print("### " ++ p.text) Ok(())),
+    Text(p) -> (let _ = print(p.text) Ok(())),
+    BulletList(p) -> (let _ = each(fn(item) -> print("- " ++ item), p.items) Ok(())),
+    NumberedList(p) -> (let _ = render_numbered(p.items) Ok(())),
+    Bold(_) -> Err("unrecognized node"),
+    Italic(_) -> Err("unrecognized node")
   }
 
 -- Render a full document, catching errors per node
 let render_doc = fn(nodes) ->
   each(fn(node) -> (render(node)? |> fn(v) -> v |> catch e -> print("Error: " ++ e)), nodes)
 
--- Build a sample document
+-- Build a sample document with an unrecognized node at the end to trigger the error
 let doc = [
-  H1("My Document"),
-  Text("A quick demo with " ++ inline(Bold("bold")) ++ " and " ++ inline(Italic("italic")) ++ " text."),
-  H2("Features"),
-  BulletList(["Tagged values as AST", "Recursive rendering", "Pattern matching"]),
-  H2("Steps"),
-  NumberedList(["Parse", "Render", "Print"]),
-  Strikethrough("oops")
+  H1({ text: "My Document" }),
+  Text({ text: "A quick demo with " ++ format_inline(Bold({ text: "bold" })) ++ " and " ++ format_inline(Italic({ text: "italic" })) ++ " text." }),
+  H2({ text: "Features" }),
+  BulletList({ items: ["Tagged values as AST", "Recursive rendering", "Pattern matching"] }),
+  H2({ text: "Steps" }),
+  NumberedList({ items: ["Parse", "Render", "Print"] }),
+  Bold({ text: "oops" })
 ]
 
 let _ = print("=== Markdown Renderer ===")

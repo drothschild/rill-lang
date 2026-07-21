@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parse } from "./parser";
+import { parse, parseProgram } from "./parser";
 import { lex } from "./lexer";
 import { prettyPrint } from "./values";
 
@@ -391,6 +391,60 @@ describe("Parser", () => {
         ],
       });
     });
+
+    it("parses match with guard on first case", () => {
+      const ast = parseExpr("match e { Some(x) if x > 0 -> x, _ -> 0 }");
+      expect(ast).toMatchObject({
+        kind: "Match",
+        cases: [
+          {
+            pattern: { kind: "TagPat", tag: "Some" },
+            guard: { kind: "BinOp", op: ">" },
+            body: { kind: "Ident", name: "x" },
+          },
+          {
+            pattern: { kind: "WildcardPat" },
+            body: { kind: "IntLit", value: 0 },
+          },
+        ],
+      });
+    });
+
+    it("parses match with guard and verifies no guard present in second case", () => {
+      const ast = parseExpr("match e { Some(x) if x > 0 -> x, None -> 1 }");
+      if (ast.kind === "Match") {
+        expect(ast.cases[0].guard).toBeDefined();
+        expect(ast.cases[1].guard).toBeUndefined();
+      }
+    });
+
+    it("parses guard-less match unchanged", () => {
+      const ast = parseExpr("match x { Some(y) -> y + 1, None -> 0 }");
+      expect(ast).toMatchObject({
+        kind: "Match",
+        cases: [
+          { pattern: { kind: "TagPat", tag: "Some" } },
+          { pattern: { kind: "TagPat", tag: "None" } },
+        ],
+      });
+      if (ast.kind === "Match") {
+        expect(ast.cases[0].guard).toBeUndefined();
+        expect(ast.cases[1].guard).toBeUndefined();
+      }
+    });
+
+    it("rejects guard with ? operator", () => {
+      expect(() => parseExpr("match e { Some(x) if f(x)? -> 1, _ -> 0 }")).toThrow(
+        /guards may not use the \? operator/
+      );
+    });
+
+    it("parses match body as if-expression when present", () => {
+      const ast = parseExpr("match x { Some(y) -> if y > 0 then 1 else 2, _ -> 0 }");
+      if (ast.kind === "Match") {
+        expect(ast.cases[0].body.kind).toBe("If");
+      }
+    });
   });
 
   describe("data structures", () => {
@@ -446,6 +500,48 @@ describe("Parser", () => {
           { name: "count", value: { kind: "IntLit", value: 2 } },
         ],
       });
+    });
+
+    it("parses record update with single field", () => {
+      const ast = parseExpr("{ state | phase: Resting }");
+      expect(ast).toMatchObject({
+        kind: "RecordUpdate",
+        base: "state",
+        fields: [
+          { name: "phase", value: { kind: "Tag", tag: "Resting", args: [] } },
+        ],
+      });
+    });
+
+    it("parses record update with multiple fields", () => {
+      const ast = parseExpr("{ s | a: 1, b: \"x\" }");
+      expect(ast).toMatchObject({
+        kind: "RecordUpdate",
+        base: "s",
+        fields: [
+          { name: "a", value: { kind: "IntLit", value: 1 } },
+          { name: "b", value: { kind: "StringLit", value: "x" } },
+        ],
+      });
+    });
+
+    it("parses record update with field value using identifier", () => {
+      const ast = parseExpr("{ s | n: m }");
+      expect(ast).toMatchObject({
+        kind: "RecordUpdate",
+        base: "s",
+        fields: [
+          { name: "n", value: { kind: "Ident", name: "m" } },
+        ],
+      });
+    });
+
+    it("rejects record update with non-identifier base", () => {
+      expect(() => parseExpr("{ f() | a: 1 }")).toThrow();
+    });
+
+    it("rejects record update with no fields", () => {
+      expect(() => parseExpr("{ x | }")).toThrow();
     });
 
     it("parses field access", () => {
@@ -616,6 +712,194 @@ describe("Parser", () => {
       expect(() => parseExpr("if x { 1 } else { 2 }")).toThrow(
         /Expected 'then' after if condition/
       );
+    });
+  });
+
+  describe("declarations", () => {
+    function parseProgWithDecls(source: string) {
+      return parseProgram(lex(source));
+    }
+
+    it("parses type declarations with payload-less constructors", () => {
+      const prog = parseProgWithDecls("type Phase = Idle | Warmup | Working\n42");
+      expect(prog.declarations).toHaveLength(1);
+      expect(prog.declarations[0]).toMatchObject({
+        kind: "TypeDecl",
+        name: "Phase",
+        params: [],
+        constructors: [
+          { name: "Idle", payload: null },
+          { name: "Warmup", payload: null },
+          { name: "Working", payload: null },
+        ],
+      });
+      expect(prog.body).toMatchObject({ kind: "IntLit", value: 42 });
+    });
+
+    it("parses type declarations with payload constructors", () => {
+      const prog = parseProgWithDecls(
+        'type Event = | StartSession({ sessionId: String }) | SetDone({ nowMs: Int })\n42'
+      );
+      expect(prog.declarations).toHaveLength(1);
+      const decl = prog.declarations[0];
+      expect(decl).toMatchObject({
+        kind: "TypeDecl",
+        name: "Event",
+        params: [],
+        constructors: [
+          { name: "StartSession" },
+          { name: "SetDone" },
+        ],
+      });
+      // Payload is a TRecord, check loosely
+      expect((decl as any).constructors[0].payload).toBeDefined();
+      expect((decl as any).constructors[0].payload.kind).toBe("TRecord");
+    });
+
+    it("parses type declarations with type parameters", () => {
+      const prog = parseProgWithDecls("type Option(a) = Some(a) | None\n42");
+      expect(prog.declarations).toHaveLength(1);
+      const decl = prog.declarations[0];
+      expect(decl).toMatchObject({
+        kind: "TypeDecl",
+        name: "Option",
+        params: ["a"],
+      });
+      expect((decl as any).constructors).toHaveLength(2);
+      expect((decl as any).constructors[0]).toMatchObject({
+        name: "Some",
+      });
+      expect((decl as any).constructors[1]).toMatchObject({
+        name: "None",
+        payload: null,
+      });
+    });
+
+    it("parses alias declarations", () => {
+      const prog = parseProgWithDecls("alias SessionState = { sessionId: String }\n42");
+      expect(prog.declarations).toHaveLength(1);
+      expect(prog.declarations[0]).toMatchObject({
+        kind: "AliasDecl",
+        name: "SessionState",
+        params: [],
+      });
+      // type is a TRecord
+      expect((prog.declarations[0] as any).type.kind).toBe("TRecord");
+    });
+
+    it("parses declarations followed by rule header and body", () => {
+      const prog = parseProgWithDecls(
+        "type A = B\nrule f(x: Int) -> Int\nx"
+      );
+      expect(prog.declarations).toHaveLength(1);
+      expect(prog.header).toBeDefined();
+      expect(prog.header?.name).toBe("f");
+      expect(prog.body).toMatchObject({ kind: "Ident", name: "x" });
+    });
+
+    it("parses a single import declaration", () => {
+      const prog = parseProgWithDecls('import "workout/helpers" as h\n42');
+      expect(prog.imports).toHaveLength(1);
+      expect(prog.imports[0]).toMatchObject({
+        kind: "ImportDecl",
+        path: "workout/helpers",
+        alias: "h",
+      });
+      expect(prog.body).toMatchObject({ kind: "IntLit", value: 42 });
+    });
+
+    it("parses multiple import declarations", () => {
+      const prog = parseProgWithDecls(
+        'import "helpers/a" as h1\nimport "helpers/b" as h2\n42'
+      );
+      expect(prog.imports).toHaveLength(2);
+      expect(prog.imports[0]).toMatchObject({
+        kind: "ImportDecl",
+        path: "helpers/a",
+        alias: "h1",
+      });
+      expect(prog.imports[1]).toMatchObject({
+        kind: "ImportDecl",
+        path: "helpers/b",
+        alias: "h2",
+      });
+    });
+
+    it("parses imports mixed with type declarations", () => {
+      const prog = parseProgWithDecls(
+        'import "helpers" as h\ntype Phase = Idle | Working\n42'
+      );
+      expect(prog.imports).toHaveLength(1);
+      expect(prog.declarations).toHaveLength(1);
+      expect(prog.imports[0]).toMatchObject({
+        kind: "ImportDecl",
+        path: "helpers",
+        alias: "h",
+      });
+      expect(prog.declarations[0]).toMatchObject({
+        kind: "TypeDecl",
+        name: "Phase",
+      });
+    });
+
+    it("rejects import without 'as' keyword", () => {
+      expect(() => parseProgWithDecls('import "helpers" h\n42')).toThrow();
+    });
+
+    it("rejects import with missing path", () => {
+      expect(() => parseProgWithDecls('import as h\n42')).toThrow();
+    });
+
+    it("rejects import with missing alias", () => {
+      expect(() => parseProgWithDecls('import "helpers" as\n42')).toThrow();
+    });
+  });
+
+  describe("type annotations - named types", () => {
+    function parseType(source: string) {
+      const tokens = lex(`rule f(x: ${source}) -> Int\n42`);
+      const prog = parseProgram(tokens);
+      return (prog.header?.params[0] as any).type;
+    }
+
+    it("parses Result as a TUnion reference instead of TResult", () => {
+      const type = parseType("Result({ ok: Bool })");
+      expect(type).toMatchObject({
+        kind: "TUnion",
+        name: "Result",
+      });
+      expect(type.args).toHaveLength(1);
+      expect(type.args[0]).toMatchObject({ kind: "TRecord" });
+    });
+
+    it("parses named types without arguments", () => {
+      const type = parseType("Phase");
+      expect(type).toMatchObject({
+        kind: "TUnion",
+        name: "Phase",
+        args: [],
+      });
+    });
+
+    it("parses named types with type arguments", () => {
+      const type = parseType("Option(Float)");
+      expect(type).toMatchObject({
+        kind: "TUnion",
+        name: "Option",
+      });
+      expect(type.args).toHaveLength(1);
+      expect(type.args[0]).toMatchObject({ kind: "TCon", name: "Float" });
+    });
+
+    it("keeps existing primitive types unchanged", () => {
+      const intType = parseType("Int");
+      expect(intType).toMatchObject({ kind: "TCon", name: "Int" });
+
+      const listType = parseType("List(String)");
+      expect(listType).toMatchObject({
+        kind: "TList",
+        element: { kind: "TCon", name: "String" },
+      });
     });
   });
 });

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { evaluate } from "./evaluator";
+import { evaluate, evaluateProgram } from "./evaluator";
 import { parse } from "./parser";
+import { parseProgram } from "./parser";
 import { lex } from "./lexer";
 import { prettyPrint, Value } from "./values";
 
@@ -10,6 +11,14 @@ function run(source: string): Value {
 
 function runPrint(source: string): string {
   return prettyPrint(run(source));
+}
+
+function runProgram(source: string): Value {
+  return evaluateProgram(parseProgram(lex(source)));
+}
+
+function runProgramPrint(source: string): string {
+  return prettyPrint(runProgram(source));
 }
 
 describe("Evaluator", () => {
@@ -120,6 +129,24 @@ describe("Evaluator", () => {
     it("matches booleans", () => {
       expect(runPrint("match true { true -> 1, false -> 0 }")).toBe("1");
     });
+
+    it("guard false falls through to next arm", () => {
+      expect(runProgramPrint(`
+        match Some(5) { Some(x) if x > 10 -> "big", Some(x) -> "small", None -> "none" }
+      `)).toBe('"small"');
+    });
+
+    it("guard true selects the arm", () => {
+      expect(runProgramPrint(`
+        match Some(50) { Some(x) if x > 10 -> "big", Some(x) -> "small", None -> "none" }
+      `)).toBe('"big"');
+    });
+
+    it("guard sees pattern bindings", () => {
+      expect(runProgramPrint(`
+        match Some(3) { Some(x) if x == 3 -> x * 2, _ -> 0 }
+      `)).toBe("6");
+    });
   });
 
   describe("error handling", () => {
@@ -215,6 +242,24 @@ describe("Evaluator", () => {
         let responded = 1
         { total, responded }.responded
       `)).toBe("1");
+    });
+
+    it("evaluates record update with single field", () => {
+      expect(runPrint('let s = { a: 1, b: "x" } in { s | a: 2 }')).toContain("a");
+      expect(runPrint('let s = { a: 1, b: "x" } in { s | a: 2 }.a')).toBe("2");
+    });
+
+    it("evaluates record update with multiple fields", () => {
+      expect(runPrint('let s = { a: 1, b: 2 } in { s | a: 10, b: 20 }.a')).toBe("10");
+      expect(runPrint('let s = { a: 1, b: 2 } in { s | a: 10, b: 20 }.b')).toBe("20");
+    });
+
+    it("preserves original record when updated", () => {
+      expect(runPrint('let s = { a: 1 } in let u = { s | a: 2 } in s.a')).toBe("1");
+    });
+
+    it("evaluates record update result in expressions", () => {
+      expect(runPrint('let s = { x: 5 } in { s | x: 10 }.x + 1')).toBe("11");
     });
 
     it("evaluates tagged values", () => {
@@ -371,6 +416,35 @@ describe("Evaluator", () => {
     it("still evaluates the right side when needed", () => {
       expect(runPrint("true && false")).toBe("false");
       expect(runPrint("false || true")).toBe("true");
+    });
+  });
+
+  describe("constructor arity checking", () => {
+    it("allows constructors with correct arity", () => {
+      expect(runProgramPrint('type Shape = Circle(Float) \n Circle(2.5)')).toBe("Circle(2.5)");
+    });
+
+    it("allows bare nullary constructors", () => {
+      expect(runProgramPrint('type Phase = Idle | Working \n Idle')).toBe("Idle");
+    });
+
+    it("throws on constructor with wrong arity (too few args)", () => {
+      expect(() =>
+        runProgram('type Shape = Circle(Float) \n Circle()')
+      ).toThrow(/Circle.*arity/i);
+    });
+
+    it("throws on constructor with wrong arity (too many args)", () => {
+      expect(() =>
+        runProgram('type Shape = Circle(Float) \n Circle(1.0, 2.0)')
+      ).toThrow(/Circle.*arity/i);
+    });
+
+    it("is permissive for bare expressions without declarations", () => {
+      // Should not throw even though Circle is not declared
+      // Note: prettyPrint omits () when args.length === 0, so Circle() prints as Circle
+      expect(runPrint("Circle()")).toBe("Circle");
+      expect(runPrint("Idle")).toBe("Idle");
     });
   });
 });

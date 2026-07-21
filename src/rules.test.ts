@@ -21,7 +21,7 @@ describe("rule headers", () => {
       expect(program.header!.name).toBe("transitions");
       expect(program.header!.params.map(p => p.name)).toEqual(["from_stage", "to_stage"]);
       expect(prettyType(program.header!.params[0].type)).toBe("String");
-      expect(prettyType(program.header!.returnType!)).toBe("Result(String, String)");
+      expect(prettyType(program.header!.returnType!)).toBe("Result(String)");
       expect(program.body).toMatchObject({ kind: "Tag", tag: "Ok" });
     });
 
@@ -54,8 +54,14 @@ describe("rule headers", () => {
       expect(program.header!.returnType).toBeNull();
     });
 
-    it("rejects an unknown type name with a positioned error", () => {
-      expect(() => parseProgram(lex("rule r(x: Widget) x"))).toThrow(/Unknown type name 'Widget'.*line 1/);
+    it("parses unknown type names as TUnion references (validation deferred to type-check)", () => {
+      const program = parseProgram(lex("rule r(x: Widget) -> Bool\ntrue"));
+      expect(program.header).not.toBeNull();
+      expect(program.header!.params[0].type).toMatchObject({
+        kind: "TUnion",
+        name: "Widget",
+        args: [],
+      });
     });
 
     it("rejects a header without parens", () => {
@@ -139,12 +145,378 @@ describe("rule headers", () => {
     });
 
     it("typechecks the real validation rule shape", () => {
+      // With Task 8-11 TUnion support implemented, this now works
       const result = checkRuleSource(`
         rule validation(job: { company_name: String, role: String, salary_min: Int, salary_max: Int }) -> Result(String)
         let _ = require(str_len(job.company_name) > 0, "Company name is required")?
         Ok("valid")
       `);
       expect(result.ok).toBe(true);
+    });
+
+    it("accepts a rule file with declared type constructors", () => {
+      const result = checkRuleSource(`
+        type Stage = Applied | Rejected
+        rule f(s: Stage) -> Bool
+        match s { Applied -> true, Rejected -> false }
+      `);
+      expect(result.ok).toBe(true);
+      expect(result.errors).toEqual([]);
+    });
+
+    it("accepts a rule file with an alias in the header", () => {
+      const result = checkRuleSource(`
+        alias Job = { company_name: String }
+        rule f(job: Job) -> Bool
+        str_len(job.company_name) > 0
+      `);
+      expect(result.ok).toBe(true);
+      expect(result.errors).toEqual([]);
+    });
+
+    it("allows alias and inline-structural forms to unify", () => {
+      const result = checkRuleSource(`
+        alias Job = { company_name: String }
+        rule f(job: Job) -> { company_name: String }
+        job
+      `);
+      expect(result.ok).toBe(true);
+      expect(result.errors).toEqual([]);
+    });
+
+    it("accepts Option type in headers", () => {
+      const result = checkRuleSource(`
+        rule f(x: Option(Float)) -> Float
+        match x { Some(v) -> v, None -> 0.0 }
+      `);
+      expect(result.ok).toBe(true);
+      expect(result.errors).toEqual([]);
+    });
+
+    it("rejects a header with an unknown type name", () => {
+      const result = checkRuleSource(`
+        rule f(x: Stge) -> Bool
+        true
+      `);
+      expect(result.ok).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0]).toContain("Stge");
+    });
+
+    it("provides did-you-mean suggestion for typo in type name", () => {
+      const result = checkRuleSource(`
+        type Stage = Applied | Rejected
+        rule f(x: Stge) -> Bool
+        true
+      `);
+      expect(result.ok).toBe(false);
+      expect(result.errors[0]).toContain("Stage");
+    });
+
+    it("reports source-located errors for unknown header type names", () => {
+      const result = checkRuleSource(`rule f(x: Bogus) -> Int
+  x`);
+      expect(result.ok).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+      // Should include source location with line/col info
+      expect(result.errors[0]).toMatch(/Error at.*line.*col|line.*col/i);
+      expect(result.errors[0]).toContain("Bogus");
+    });
+
+    it("reports source-located errors for unknown return type names", () => {
+      const result = checkRuleSource(`rule f(x: Int) -> UnknownType
+  x`);
+      expect(result.ok).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+      // Should include source location with line/col info
+      expect(result.errors[0]).toMatch(/Error at.*line.*col|line.*col/i);
+      expect(result.errors[0]).toContain("UnknownType");
+    });
+
+    describe("Task 6: Exhaustiveness checking at load gate", () => {
+      it("AC1.5: non-exhaustive match fails the load gate", () => {
+        const result = checkRuleSource(`
+          type Event = LogSet({ reps: Int }) | PauseSession | RestElapsed({ reps: Int })
+          rule f(e: Event) -> Int
+          match e {
+            LogSet(p) -> p.reps
+          }
+        `);
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0]).toMatch(/missing|exhaustiv/i);
+      });
+
+      it("AC1.5: exhaustive match passes the load gate", () => {
+        const result = checkRuleSource(`
+          type Event = LogSet({ reps: Int }) | PauseSession
+          rule f(e: Event) -> Int
+          match e {
+            LogSet(p) -> p.reps,
+            PauseSession -> 0
+          }
+        `);
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+      });
+
+      it("AC1.6: payload access from wrong constructor arm fails", () => {
+        const result = checkRuleSource(`
+          type Event = LogSet({ reps: Int }) | PauseSession
+          rule f(e: Event) -> Int
+          match e {
+            LogSet(p) -> p.reps,
+            PauseSession -> p.reps
+          }
+        `);
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+      });
+
+      it("AC1.8: guard-only coverage fails exhaustiveness", () => {
+        const result = checkRuleSource(`
+          type Event = Start | Pause | Stop
+          rule f(e: Event) -> Int
+          match e {
+            Start if false -> 1,
+            Pause -> 2,
+            Stop -> 3
+          }
+        `);
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0]).toMatch(/missing|exhaustiv/i);
+      });
+
+      it("AC1.8: only guarded Pause is not exhaustive", () => {
+        const result = checkRuleSource(`
+          type Event = Start | Pause
+          rule f(e: Event) -> Int
+          match e {
+            Start -> 1,
+            Pause if true -> 2
+          }
+        `);
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+      });
+
+      it("AC4.1: Option match missing None fails", () => {
+        const result = checkRuleSource(`
+          rule f(o: Option(Int)) -> Int
+          match o { Some(x) -> x }
+        `);
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0]).toMatch(/missing|exhaustiv/i);
+      });
+
+      it("parse error in guard surfaces through checkRuleSource", () => {
+        const result = checkRuleSource(`
+          rule f(x: Int) -> Int
+          match x { 1 if f(x)? -> 2, _ -> 0 }
+        `);
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+      });
+    });
+
+    describe("Task 6: Module system integration", () => {
+      it("backwards compatible: no options = no-import behavior", () => {
+        const result = checkRuleSource(`
+          rule f(x: Int) -> Int
+          x + 1
+        `);
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+      });
+
+      it("import without resolver → clear error", () => {
+        const result = checkRuleSource(`
+          import "helpers" as h
+          rule f(x: Int) -> Int
+          x + 1
+        `);
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0]).toMatch(/import|resolver/i);
+      });
+
+      it("rule header can reference imported types", () => {
+        const helperSource = `
+          type Stage = Idle | Working
+          let dummy = 1
+          0
+        `;
+        const resolver = (path: string) => {
+          if (path === "helpers") return helperSource;
+          throw new Error(`Unknown import: ${path}`);
+        };
+        const result = checkRuleSource(
+          `
+          import "helpers" as h
+          rule f(s: Stage) -> String
+          match s { Idle -> "idle", Working -> "working" }
+          `,
+          { resolve: resolver, path: "entry" }
+        );
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+        expect(result.header!.name).toBe("f");
+      });
+
+      it("broken helper → ok:false located in helper", () => {
+        const helperSource = `
+          type Stage = Idle | Working
+          let broken = 1 + "x"
+          0
+        `;
+        const resolver = (path: string) => {
+          if (path === "helpers") return helperSource;
+          throw new Error(`Unknown import: ${path}`);
+        };
+        const result = checkRuleSource(
+          `
+          import "helpers" as h
+          rule f(x: Int) -> Int
+          x + 1
+          `,
+          { resolve: resolver, path: "entry" }
+        );
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0]).toMatch(/helpers/);
+      });
+
+      it("import cycle → ok:false with full chain", () => {
+        const aSource = `import "b" as b\nlet a = 1\n0`;
+        const bSource = `import "a" as a\nlet b = 2\n0`;
+        const resolver = (path: string) => {
+          if (path === "a") return aSource;
+          if (path === "b") return bSource;
+          throw new Error(`Unknown import: ${path}`);
+        };
+        const result = checkRuleSource(
+          `
+          import "a" as a
+          rule f(x: Int) -> Int
+          x + 1
+          `,
+          { resolve: resolver, path: "entry" }
+        );
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0]).toMatch(/cycle|->.*->.*->/);
+      });
+
+      it("qualified value access in rule body", () => {
+        const helperSource = `
+          let add = fn(a) -> fn(b) -> a + b
+          0
+        `;
+        const resolver = (path: string) => {
+          if (path === "helpers") return helperSource;
+          throw new Error(`Unknown import: ${path}`);
+        };
+        const result = checkRuleSource(
+          `
+          import "helpers" as h
+          rule f(x: Int) -> Int
+          h.add(x)(1)
+          `,
+          { resolve: resolver, path: "entry" }
+        );
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+      });
+
+      it("unknown module export → error naming available exports", () => {
+        const helperSource = `
+          let add(a: Int, b: Int) = a + b
+          0
+        `;
+        const resolver = (path: string) => {
+          if (path === "helpers") return helperSource;
+          throw new Error(`Unknown import: ${path}`);
+        };
+        const result = checkRuleSource(
+          `
+          import "helpers" as h
+          rule f(x: Int) -> Int
+          h.nonexistent(x, 1)
+          `,
+          { resolve: resolver, path: "entry" }
+        );
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+      });
+
+      it("BUG 1: alias references in constructor payload types are resolved", () => {
+        const result = checkRuleSource(`
+          alias A = { n: Int }
+          type E = Mk({ a: A })
+          rule f(e: E) -> Int
+          match e { Mk(p) -> p.a.n }
+        `);
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+      });
+
+      it("BUG 1: List(alias) in constructor payload is resolved", () => {
+        const result = checkRuleSource(`
+          alias Item = { value: Int }
+          type Container = Hold(List(Item))
+          rule f(c: Container) -> Int
+          match c { Hold(items) -> length(items) }
+        `);
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+      });
+
+      it("BUG 1: aliased union member in constructor payload is resolved", () => {
+        const helperSource = `
+          let dummy = 1
+          0
+        `;
+        const resolver = (path: string) => {
+          if (path === "helpers") return helperSource;
+          throw new Error(`Unknown import: ${path}`);
+        };
+        const result = checkRuleSource(
+          `
+          import "helpers" as h
+          alias ItemPayload = { id: Int, name: String }
+          type Item = Create(ItemPayload) | Delete(Int)
+          rule f(item: Item) -> String
+          match item { Create(p) -> p.name, Delete(_) -> "" }
+          `,
+          { resolve: resolver, path: "entry" }
+        );
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+      });
+
+      it("BUG 2: entry with imports AND own declarations does not duplicate", () => {
+        const helperSource = `
+          let f = fn(x) -> x + 1
+          0
+        `;
+        const resolver = (path: string) => {
+          if (path === "helpers") return helperSource;
+          throw new Error(`Unknown import: ${path}`);
+        };
+        const result = checkRuleSource(
+          `
+          import "helpers" as h
+          type P = A | B
+          rule main(p: P) -> Int
+          match p { A -> h.f(1), B -> 0 }
+          `,
+          { resolve: resolver, path: "entry" }
+        );
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+      });
     });
   });
 });

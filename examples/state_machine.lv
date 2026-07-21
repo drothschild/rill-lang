@@ -1,42 +1,52 @@
 -- Turnstile State Machine
--- A classic finite state machine using tagged values as states/events
--- Showcases tuple pattern matching, recursive list processing, and zero-arg tags
+-- A finite state machine with declared Phase and Event types
+-- Showcases exhaustive matching on declared unions, guards, and record update
 
--- Transition function: given state and event, return Next(new_state, message)
--- Uses tuple pattern matching to match on (state, event) pairs
-let transition = fn(state, event) ->
-  match (state, event) {
-    (Locked, Coin) -> Next(Unlocked, "Coin inserted: unlocked!"),
-    (Locked, Push) -> Next(Locked, "Pushed: still locked."),
-    (Unlocked, Push) -> Next(Locked, "Pushed through: locked!"),
-    (Unlocked, Coin) -> Next(Unlocked, "Extra coin: already unlocked.")
-  }
+type Phase = Locked | Unlocked
 
--- Convert a state tag to a string
-let show_state = fn(s) ->
-  match s {
+type Event = Coin | Push
+
+alias Transition = { state: Phase, message: String }
+
+-- Helper to describe a phase
+let show_phase = fn(p) ->
+  match p {
     Locked -> "Locked",
     Unlocked -> "Unlocked"
   }
 
--- Recursively process a list of events
+-- Process a single event: match exhaustively on declared Event union
+-- Every constructor (Coin, Push) must be handled; the typechecker verifies this
+let process_event = fn(state, event) ->
+  match event {
+    Coin ->
+      match state {
+        Locked -> { state: Unlocked, message: "Coin inserted: unlocked!" },
+        Unlocked -> { state: Unlocked, message: "Extra coin: already unlocked." }
+      },
+    Push ->
+      match state {
+        Locked -> { state: Locked, message: "Pushed: still locked." },
+        Unlocked -> { state: Locked, message: "Pushed through: locked!" }
+      }
+  }
+
+-- Recursively process a list of events, maintaining state
 let rec run = fn(state, events) ->
-  if length(events) == 0 then state
-  else
-    let event = head(events)?
-    let result = transition(state, event)
-    match result {
-      Next(new_state, msg) ->
-        let _ = print(msg)
-        let remaining = tail(events)?
-        run(new_state, remaining)
-    }
+  match at(0, events) {
+    Ok(event) ->
+      let result = process_event(state, event)
+      let _ = print(result.message)
+      let remaining = tail(events)?
+      run(result.state, remaining),
+    Err(_) -> state
+  }
 
 let _ = print("=== Turnstile State Machine ===")
-let _ = print("Start: " ++ show_state(Locked))
+let _ = print("Start: " ++ show_phase(Locked))
 
 let events = [Coin, Push, Push, Coin, Coin, Push]
 let final = run(Locked, events)
 
-let _ = print("Final state: " ++ show_state(final))
+let _ = print("Final state: " ++ show_phase(final))
 print("=== Done! ===")

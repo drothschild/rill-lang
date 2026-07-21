@@ -14,6 +14,9 @@ const KEYWORDS: Record<string, TokenKind> = {
   rule: TokenKind.Rule,
   true: TokenKind.True,
   false: TokenKind.False,
+  type: TokenKind.Type,
+  alias: TokenKind.Alias,
+  import: TokenKind.Import,
 };
 
 export function lex(source: string): Token[] {
@@ -210,6 +213,7 @@ export function lex(source: string): Token[] {
       case ".": emit(TokenKind.Dot, ".", startLine, startCol, startOffset); break;
       case ":": emit(TokenKind.Colon, ":", startLine, startCol, startOffset); break;
       case "_": emit(TokenKind.Underscore, "_", startLine, startCol, startOffset); break;
+      case "|": emit(TokenKind.Bar, "|", startLine, startCol, startOffset); break;
       default:
         throw new Error(`Unexpected character '${ch}' at line ${startLine}, col ${startCol}`);
     }
