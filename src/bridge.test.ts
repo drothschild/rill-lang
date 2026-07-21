@@ -772,6 +772,265 @@ describe("jsToRill - type-directed inbound conversion", () => {
       }).toThrow(/multi.*payload|constructor.*unsupported|multiple.*arg/i);
     });
   });
+
+  describe("aliases in union payloads", () => {
+    it("resolves alias in union constructor record payload", () => {
+      // Create a custom declEnv with an alias and union using that alias
+      const customDeclEnv: DeclEnv = {
+        unions: new Map([
+          ...declEnv.unions,
+          ["E", { name: "E", params: [], ctors: ["Mk"] }],
+        ]),
+        ctors: new Map([
+          ...declEnv.ctors,
+          [
+            "Mk",
+            {
+              union: "E",
+              typeParams: [],
+              payload: T.record({
+                a: T.union("A", []),
+                xs: T.list(T.union("A", [])),
+              }),
+            },
+          ],
+        ]),
+        aliases: new Map([
+          ...declEnv.aliases,
+          [
+            "A",
+            {
+              name: "A",
+              params: [],
+              type: T.record({ n: T.Int }),
+            },
+          ],
+        ]),
+      };
+
+      // Convert JS to Rill
+      const result = jsToRill(
+        { tag: "Mk", value: { a: { n: 1 }, xs: [{ n: 2 }] } },
+        T.union("E", []),
+        customDeclEnv,
+        "event"
+      );
+
+      // Check structure is correct
+      expect(result.kind).toBe("Tag");
+      expect(result.tag).toBe("Mk");
+      expect(result.args.length).toBe(1);
+
+      const payload = result.args[0];
+      expect(payload.kind).toBe("Record");
+      const fields = payload.fields as Map<string, any>;
+
+      // Check a field - should be a record with n: Int
+      expect(fields.get("a").kind).toBe("Record");
+      const aRecord = fields.get("a").fields as Map<string, any>;
+      expect(aRecord.get("n")).toEqual({ kind: "Int", value: 1 });
+
+      // Check xs field - should be a list of records
+      expect(fields.get("xs").kind).toBe("List");
+      const xsList = fields.get("xs").elements;
+      expect(xsList.length).toBe(1);
+      expect(xsList[0].kind).toBe("Record");
+      const xsRecord = xsList[0].fields as Map<string, any>;
+      expect(xsRecord.get("n")).toEqual({ kind: "Int", value: 2 });
+    });
+
+    it("round-trips alias in union constructor record payload", () => {
+      // Create a custom declEnv with an alias and union using that alias
+      const customDeclEnv: DeclEnv = {
+        unions: new Map([
+          ...declEnv.unions,
+          ["E", { name: "E", params: [], ctors: ["Mk"] }],
+        ]),
+        ctors: new Map([
+          ...declEnv.ctors,
+          [
+            "Mk",
+            {
+              union: "E",
+              typeParams: [],
+              payload: T.record({
+                a: T.union("A", []),
+                xs: T.list(T.union("A", [])),
+              }),
+            },
+          ],
+        ]),
+        aliases: new Map([
+          ...declEnv.aliases,
+          [
+            "A",
+            {
+              name: "A",
+              params: [],
+              type: T.record({ n: T.Int }),
+            },
+          ],
+        ]),
+      };
+
+      // Original Rill value
+      const original: Value = {
+        kind: "Tag",
+        tag: "Mk",
+        args: [
+          {
+            kind: "Record",
+            fields: new Map([
+              [
+                "a",
+                {
+                  kind: "Record",
+                  fields: new Map([["n", { kind: "Int", value: 1 }]]),
+                },
+              ],
+              [
+                "xs",
+                {
+                  kind: "List",
+                  elements: [
+                    {
+                      kind: "Record",
+                      fields: new Map([["n", { kind: "Int", value: 2 }]]),
+                    },
+                  ],
+                },
+              ],
+            ]),
+          },
+        ],
+      };
+
+      // Convert to JS
+      const js = rillToJs(original);
+      expect(js).toEqual({
+        tag: "Mk",
+        value: { a: { n: 1 }, xs: [{ n: 2 }] },
+      });
+
+      // Round-trip back
+      const roundTrip = jsToRill(
+        js,
+        T.union("E", []),
+        customDeclEnv,
+        "event"
+      );
+
+      expect(roundTrip).toEqual(original);
+    });
+
+    it("resolves alias used directly as union constructor payload", () => {
+      // Create a custom declEnv with alias and union where alias is the direct payload
+      const customDeclEnv: DeclEnv = {
+        unions: new Map([
+          ...declEnv.unions,
+          ["E2", { name: "E2", params: [], ctors: ["Wrap"] }],
+        ]),
+        ctors: new Map([
+          ...declEnv.ctors,
+          [
+            "Wrap",
+            {
+              union: "E2",
+              typeParams: [],
+              payload: T.union("A", []),
+            },
+          ],
+        ]),
+        aliases: new Map([
+          ...declEnv.aliases,
+          [
+            "A",
+            {
+              name: "A",
+              params: [],
+              type: T.record({ n: T.Int }),
+            },
+          ],
+        ]),
+      };
+
+      // Convert JS to Rill
+      const result = jsToRill(
+        { tag: "Wrap", value: { n: 42 } },
+        T.union("E2", []),
+        customDeclEnv,
+        "event"
+      );
+
+      // Check structure is correct
+      expect(result.kind).toBe("Tag");
+      expect(result.tag).toBe("Wrap");
+      expect(result.args.length).toBe(1);
+
+      const payload = result.args[0];
+      expect(payload.kind).toBe("Record");
+      const fields = payload.fields as Map<string, any>;
+      expect(fields.get("n")).toEqual({ kind: "Int", value: 42 });
+    });
+
+    it("round-trips alias used directly as union constructor payload", () => {
+      // Create a custom declEnv with alias and union where alias is the direct payload
+      const customDeclEnv: DeclEnv = {
+        unions: new Map([
+          ...declEnv.unions,
+          ["E2", { name: "E2", params: [], ctors: ["Wrap"] }],
+        ]),
+        ctors: new Map([
+          ...declEnv.ctors,
+          [
+            "Wrap",
+            {
+              union: "E2",
+              typeParams: [],
+              payload: T.union("A", []),
+            },
+          ],
+        ]),
+        aliases: new Map([
+          ...declEnv.aliases,
+          [
+            "A",
+            {
+              name: "A",
+              params: [],
+              type: T.record({ n: T.Int }),
+            },
+          ],
+        ]),
+      };
+
+      // Original Rill value
+      const original: Value = {
+        kind: "Tag",
+        tag: "Wrap",
+        args: [
+          {
+            kind: "Record",
+            fields: new Map([["n", { kind: "Int", value: 42 }]]),
+          },
+        ],
+      };
+
+      // Convert to JS
+      const js = rillToJs(original);
+      expect(js).toEqual({ tag: "Wrap", value: { n: 42 } });
+
+      // Round-trip back
+      const roundTrip = jsToRill(
+        js,
+        T.union("E2", []),
+        customDeclEnv,
+        "event"
+      );
+
+      expect(roundTrip).toEqual(original);
+    });
+  });
 });
 
 describe("BridgeError class", () => {

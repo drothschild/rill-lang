@@ -292,6 +292,11 @@ function jsToRillWithResolved(
         instantiatedPayloadType = substituteTypeParams(payloadType, paramSubst);
       }
 
+      // Resolve aliases in the instantiated payload type
+      if (instantiatedPayloadType) {
+        instantiatedPayloadType = resolveTypeAnn(instantiatedPayloadType, declEnv);
+      }
+
       // Convert payload if present
       if (instantiatedPayloadType) {
         const rawPayload = (value as any).value;
