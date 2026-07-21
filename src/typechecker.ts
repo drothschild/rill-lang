@@ -349,6 +349,20 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution, declEnv: DeclE
         }
         const matchEnv = new Map(env);
         for (const [k, t] of patBindings) matchEnv.set(k, mono(t));
+        // If guard exists, typecheck it in the extended environment and ensure it's Bool
+        if (c.guard) {
+          const [guardT, s3] = inferExpr(c.guard, matchEnv, s, declEnv);
+          const boolT: Type = { kind: "TCon", name: "Bool" };
+          try {
+            s = unify(applySubst(s3, guardT), boolT, s3);
+          } catch {
+            const guardTResolved = applySubst(s3, guardT);
+            throw typeError(
+              `Guard must be Bool, but got ${prettyType(guardTResolved)}`,
+              c.guard.span
+            );
+          }
+        }
         const [bodyT, s3] = inferExpr(c.body, matchEnv, s, declEnv);
         s = unify(retT, bodyT, s3);
       }

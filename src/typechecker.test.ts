@@ -132,6 +132,18 @@ describe("Type Inference", () => {
     it("infers match with tag patterns", () => {
       expect(typeOf("match Ok(5) { Ok(n) -> n + 1, Err(e) -> 0 }")).toBe("Int");
     });
+
+    it("infers match with Bool guard", () => {
+      expect(typeOf("match Some(5) { Some(x) if x > 0 -> x, _ -> 0 }")).toBe("Int");
+    });
+
+    it("allows guard to use pattern bindings", () => {
+      expect(typeOf("match Some(3) { Some(x) if x == 3 -> x * 2, _ -> 0 }")).toBe("Int");
+    });
+
+    it("rejects non-Bool guard", () => {
+      expect(() => typeOf("match Some(3) { Some(x) if x -> x, _ -> 0 }")).toThrow(/Bool/);
+    });
   });
 
   describe("if/then/else types", () => {
