@@ -1,5 +1,5 @@
 import { Token, TokenKind } from "./token";
-import { Expr } from "./ast";
+import { Expr, Declaration } from "./ast";
 import { Span } from "./span";
 import { Type, freshTypeVar } from "./types";
 
@@ -22,6 +22,7 @@ export interface RuleHeader {
 }
 
 export interface Program {
+  declarations: Declaration[];
   header: RuleHeader | null;
   body: Expr;
 }
@@ -33,7 +34,7 @@ export function parseProgram(tokens: Token[]): Program {
   const header = parser.at(TokenKind.Rule) ? parser.parseRuleHeader() : null;
   const body = parser.parseExpr(0);
   parser.expect(TokenKind.EOF);
-  return { header, body };
+  return { declarations: [], header, body };
 }
 
 class Parser {

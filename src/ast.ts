@@ -1,4 +1,31 @@
 import { Span } from "./span";
+import { Type } from "./types";
+
+// ── Declarations ─────────────────────────────────────────
+
+export interface ConstructorDef {
+  name: string;
+  payload: Type | null;
+  span: Span;
+}
+
+export interface TypeDecl {
+  kind: "TypeDecl";
+  name: string;
+  params: string[];
+  constructors: ConstructorDef[];
+  span: Span;
+}
+
+export interface AliasDecl {
+  kind: "AliasDecl";
+  name: string;
+  params: string[];
+  type: Type;
+  span: Span;
+}
+
+export type Declaration = TypeDecl | AliasDecl;
 
 // ── Expressions ──────────────────────────────────────────
 
