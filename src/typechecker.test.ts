@@ -692,3 +692,152 @@ describe("Task 10: Try, Catch, Pipe forms with declared Result", () => {
     expect(() => typeOf("Some(5)?")).toThrow(/Result/);
   });
 });
+
+describe("Task 4: Coverage checker for union subjects", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("rejects match missing a union constructor", () => {
+    const source = `type Event = StartSession({ nowMs: Int }) | PauseSession | RestElapsed({ nowMs: Int })
+      match StartSession({ nowMs: 1 }) { StartSession(p) -> p.nowMs }`;
+    expect(() => typeOfProgram(source)).toThrow();
+  });
+
+  it("match with all constructors checks ok", () => {
+    const source = `type Event = StartSession({ nowMs: Int }) | PauseSession | RestElapsed({ nowMs: Int })
+      match StartSession({ nowMs: 1 }) {
+        StartSession(p) -> p.nowMs,
+        PauseSession -> 0,
+        RestElapsed(p) -> p.nowMs
+      }`;
+    expect(typeOfProgram(source)).toBe("Int");
+  });
+
+  it("unguarded wildcard arm makes match exhaustive", () => {
+    const source = `type Event = StartSession({ nowMs: Int }) | PauseSession | RestElapsed({ nowMs: Int })
+      match StartSession({ nowMs: 1 }) {
+        StartSession(p) -> p.nowMs,
+        _ -> 0
+      }`;
+    expect(typeOfProgram(source)).toBe("Int");
+  });
+
+  it("unguarded ident arm makes match exhaustive", () => {
+    const source = `type Event = StartSession({ nowMs: Int })
+      match StartSession({ nowMs: 1 }) {
+        StartSession(p) -> p.nowMs,
+        e -> 0
+      }`;
+    expect(typeOfProgram(source)).toBe("Int");
+  });
+
+  it("guarded arms do not count toward coverage", () => {
+    const source = `type Event = StartSession | PauseSession | RestElapsed
+      match StartSession {
+        StartSession if false -> 1,
+        PauseSession -> 2,
+        RestElapsed -> 3
+      }`;
+    expect(() => typeOfProgram(source)).toThrow(/missing.*StartSession/i);
+  });
+
+  it("Option(Int) missing None fails exhaustiveness", () => {
+    const source = `match Some(1) { Some(x) -> x, _ -> 0 }`;
+    expect(() => typeOf(source)).not.toThrow();
+  });
+
+  it("conservative rule: refutable single pattern does not cover", () => {
+    const source = `type Msg = Code(Int)
+      match Code(1) {
+        Code(1) -> "one"
+      }`;
+    expect(() => typeOfProgram(source)).toThrow(/missing.*Code/i);
+  });
+
+  it("conservative nested-refutable rule: joint coverage fails", () => {
+    const source = `type Wrap = W(Option(Int))
+      match W(Some(1)) {
+        W(Some(x)) -> x,
+        W(None) -> 0
+      }`;
+    expect(() => typeOfProgram(source)).toThrow(/missing.*W/i);
+  });
+
+  it("conservative rule: unguarded irrefutable payload covers", () => {
+    const source = `type Wrap = W(Option(Int))
+      match W(Some(1)) {
+        W(o) -> match o { Some(x) -> x, None -> 0 },
+        _ -> 0
+      }`;
+    expect(typeOfProgram(source)).toBe("Int");
+  });
+});
+
+describe("Task 5: Coverage for Bool and non-union subjects", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("Bool with true and false is exhaustive", () => {
+    const source = `match true { true -> 1, false -> 2 }`;
+    expect(typeOf(source)).toBe("Int");
+  });
+
+  it("Bool missing false is inexhaustive", () => {
+    const source = `match true { true -> 1 }`;
+    expect(() => typeOf(source)).toThrow(/missing.*false/i);
+  });
+
+  it("Int literals require catch-all", () => {
+    const source = `match 1 { 1 -> "one", 2 -> "two" }`;
+    expect(() => typeOf(source)).toThrow();
+  });
+
+  it("Int with wildcard is exhaustive", () => {
+    const source = `match 1 { 1 -> "one", 2 -> "two", _ -> "other" }`;
+    expect(typeOf(source)).toBe("String");
+  });
+
+  it("String requires catch-all", () => {
+    const source = `match "hello" { "hello" -> 1, "world" -> 2 }`;
+    expect(() => typeOf(source)).toThrow();
+  });
+
+  it("unresolved type variable requires catch-all", () => {
+    const source = `fn(x) -> match x { 1 -> true }`;
+    expect(() => typeOf(source)).toThrow();
+  });
+
+  it("unresolved type variable with wildcard is ok", () => {
+    const source = `fn(x) -> match x { 1 -> true, _ -> false }`;
+    expect(typeOf(source)).toMatch(/-> /);
+  });
+});
+
+describe("Task 6: AC1.6 wrong-arm payload access + load-gate exhaustiveness tests", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("payload access from wrong constructor arm is caught", () => {
+    const source = `type Event = LogSet({ reps: Int }) | PauseSession
+      match LogSet({ reps: 5 }) {
+        LogSet(p) -> p.reps,
+        PauseSession -> p.reps
+      }`;
+    expect(() => typeOfProgram(source)).toThrow();
+  });
+
+  it("correct pattern binding allows payload access", () => {
+    const source = `type Event = LogSet({ reps: Int }) | PauseSession
+      match LogSet({ reps: 5 }) {
+        LogSet(p) -> p.reps,
+        PauseSession -> 0
+      }`;
+    expect(typeOfProgram(source)).toBe("Int");
+  });
+
+  it("payload-less constructor cannot be given a sub-pattern", () => {
+    const source = `type Event = LogSet({ reps: Int }) | PauseSession
+      match PauseSession {
+        PauseSession(p) -> p,
+        _ -> 0
+      }`;
+    expect(() => typeOfProgram(source)).toThrow();
+  });
+});

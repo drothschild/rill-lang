@@ -366,6 +366,9 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution, declEnv: DeclE
         const [bodyT, s3] = inferExpr(c.body, matchEnv, s, declEnv);
         s = unify(retT, bodyT, s3);
       }
+      // Check exhaustiveness after processing all cases
+      const resolvedSubjT = applySubst(s, subjT);
+      checkExhaustiveness(resolvedSubjT, expr.cases, declEnv, expr.span);
       return [applySubst(s, retT), s];
     }
 
@@ -479,6 +482,119 @@ function inferBinOp(op: string, leftT: Type, rightT: Type, subst: Substitution):
   }
 
   throw new TypeError(`Unknown operator: ${op}`);
+}
+
+function isIrrefutablePattern(pattern: import("./ast").Pattern): boolean {
+  switch (pattern.kind) {
+    case "WildcardPat":
+    case "IdentPat":
+      return true;
+    case "TagPat":
+      // Nested TagPat is refutable (per phase spec: "nested TagPat" is refutable)
+      return false;
+    case "TuplePat":
+      // TuplePat is irrefutable only if all elements are irrefutable
+      return pattern.elements.every(isIrrefutablePattern);
+    case "RecordPat":
+      // RecordPat is irrefutable only if all fields are irrefutable
+      return pattern.fields.every(f => isIrrefutablePattern(f.pattern));
+    case "IntPat":
+    case "FloatPat":
+    case "StringPat":
+    case "BoolPat":
+      return false;
+  }
+}
+
+function checkExhaustiveness(
+  subjectType: Type,
+  cases: import("./ast").MatchCase[],
+  declEnv: DeclEnv,
+  span: Span
+): void {
+  // Rule 1: Any unguarded wildcard or ident arm covers everything
+  for (const c of cases) {
+    if (!c.guard) {
+      if (c.pattern.kind === "WildcardPat" || c.pattern.kind === "IdentPat") {
+        return; // Exhaustive
+      }
+    }
+  }
+
+  // Rule 2: Declared union subject
+  if (subjectType.kind === "TUnion") {
+    const unionDecl = declEnv.unions.get(subjectType.name);
+    if (!unionDecl) {
+      throw new TypeError(`Unknown union type: ${subjectType.name}`);
+    }
+
+    const ctorsInDecl = unionDecl.ctors;
+    const coveredCtors = new Set<string>();
+
+    for (const c of cases) {
+      if (c.guard) {
+        // Rule 5: Guarded arms never count toward coverage
+        continue;
+      }
+      if (c.pattern.kind === "TagPat") {
+        // Check if the payload sub-pattern (if any) is irrefutable
+        if (c.pattern.args.length === 0) {
+          // Payload-less: always irrefutable
+          coveredCtors.add(c.pattern.tag);
+        } else if (c.pattern.args.length === 1 && isIrrefutablePattern(c.pattern.args[0])) {
+          // Has irrefutable sub-pattern: covers
+          coveredCtors.add(c.pattern.tag);
+        }
+        // If has refutable sub-pattern: conservative rule, does NOT count
+      }
+    }
+
+    const missing: string[] = [];
+    for (const ctor of ctorsInDecl) {
+      if (!coveredCtors.has(ctor)) {
+        missing.push(ctor);
+      }
+    }
+
+    if (missing.length > 0) {
+      const missingText = missing.map(c => {
+        // Check if ctor needs a payload marker
+        const ctorInfo = declEnv.ctors.get(c);
+        const needsPayload = ctorInfo && ctorInfo.payload !== null;
+        return needsPayload ? `${c}(_)` : c;
+      }).join(", ");
+      throw typeError(
+        `This match does not cover all possible values of ${subjectType.name}.\nMissing patterns: ${missing.map(m => `  - ${m}`).join("\n")}`,
+        span
+      );
+    }
+    return;
+  }
+
+  // Rule 3: Bool subject
+  if (subjectType.kind === "TCon" && subjectType.name === "Bool") {
+    const hasTrueArm = cases.some(c => !c.guard && c.pattern.kind === "BoolPat" && c.pattern.value === true);
+    const hasFalseArm = cases.some(c => !c.guard && c.pattern.kind === "BoolPat" && c.pattern.value === false);
+
+    if (!hasTrueArm || !hasFalseArm) {
+      const missing: string[] = [];
+      if (!hasTrueArm) missing.push("true");
+      if (!hasFalseArm) missing.push("false");
+      throw typeError(
+        `This match does not cover all possible values of Bool.\nMissing patterns: ${missing.map(m => `  - ${m}`).join("\n")}`,
+        span
+      );
+    }
+    return;
+  }
+
+  // Rule 4: Other types require catch-all
+  // Only allow exhaustive if there's a wildcard or ident (already checked in rule 1)
+  // For unresolved type variables (TVar), also require catch-all
+  throw typeError(
+    `This match requires a catch-all arm (${subjectType.kind === "TVar" ? "unresolved type" : "non-union subject type"}). Use _ to match any value.`,
+    span
+  );
 }
 
 function inferPattern(pattern: import("./ast").Pattern, subst: Substitution, declEnv: DeclEnv): [Type, Map<string, Type>, Substitution] {
