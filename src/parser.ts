@@ -853,6 +853,11 @@ function checkNoTryInGuard(expr: Expr): void {
     case "FieldAccess":
       checkNoTryInGuard(expr.expr);
       break;
+    case "RecordUpdate":
+      for (const field of expr.fields) {
+        checkNoTryInGuard(field.value);
+      }
+      break;
     case "Tag":
       for (const arg of expr.args) {
         checkNoTryInGuard(arg);
