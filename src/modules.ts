@@ -3,7 +3,8 @@ import { parseProgram, Program } from "./parser";
 import { buildDeclEnv, createPreludeDeclEnv, DeclEnv } from "./decls";
 import { RillError } from "./errors";
 import { inferTopLevelLets, TypeEnv } from "./typechecker";
-import { evaluateProgram, Value } from "./evaluator";
+import { evaluateProgram } from "./evaluator";
+import { Value } from "./values";
 
 export type Resolver = (path: string) => string;
 
