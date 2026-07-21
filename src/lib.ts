@@ -22,3 +22,7 @@ export type { Type } from './types';
 export { rillToJs, jsToRill, BridgeError } from './bridge';
 export { createPreludeDeclEnv } from './decls';
 export type { DeclEnv } from './decls';
+
+// Engine API for state machine dispatch (Phase 5)
+export { createEngine, TransitionError } from './engine';
+export type { Engine, EngineConfig } from './engine';

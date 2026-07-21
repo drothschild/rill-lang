@@ -1,6 +1,6 @@
-import { Resolver, checkRuleSource } from "./rules";
+import { checkRuleSource } from "./rules";
 import { RuleHeader, parseProgram } from "./parser";
-import { loadModules, buildGraphDeclEnv } from "./modules";
+import { Resolver, loadModules, buildGraphDeclEnv } from "./modules";
 import { jsToRill, rillToJs } from "./bridge";
 import { Value } from "./values";
 import { createPrelude } from "./prelude";

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 // Import from the BUILT package entry, exactly as a consumer would.
-import { infer, createPreludeTypeEnv, bindType, T, lex, parse, jsToRill, rillToJs, BridgeError, createPreludeDeclEnv } from "../dist/lib.js";
+import { infer, createPreludeTypeEnv, bindType, T, lex, parse, jsToRill, rillToJs, BridgeError, createPreludeDeclEnv, createEngine, TransitionError } from "../dist/lib.js";
 
 describe("built lib.js checking API", () => {
   it("exports the checking API as callable values", () => {
@@ -75,5 +75,50 @@ describe("built lib.js bridge API (Phase 5)", () => {
     const js = rillToJs(original);
     const roundTrip = jsToRill(js, T.Int, env, "x");
     expect(roundTrip).toEqual(original);
+  });
+});
+
+describe("built lib.js engine API (Phase 5)", () => {
+  it("exports createEngine and TransitionError as callable functions/classes", () => {
+    expect(typeof createEngine).toBe("function");
+    expect(typeof TransitionError).toBe("function");
+  });
+
+  it("TransitionError is an Error subclass", () => {
+    const err = new TransitionError("test message");
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toBe("test message");
+  });
+
+  it("creates an engine and dispatches a transition", () => {
+    const engine = createEngine({
+      resolve: () => `
+        rule transition(state: Int, event: String) -> Result({ state: Int, effects: List(Unit) })
+        Ok({ state: state + 1, effects: [] })
+      `,
+      entry: "transition.rill",
+      initialState: 10,
+      executors: {},
+    });
+
+    expect(engine.getState()).toBe(10);
+    const newState = engine.dispatch("event");
+    expect(newState).toBe(11);
+    expect(engine.getState()).toBe(11);
+  });
+
+  it("throws TransitionError on Err result", () => {
+    const engine = createEngine({
+      resolve: () => `
+        rule transition(state: Int, event: String) -> Result({ state: Int, effects: List(Unit) })
+        Err("test error")
+      `,
+      entry: "transition.rill",
+      initialState: 0,
+      executors: {},
+    });
+
+    expect(() => engine.dispatch("event")).toThrow(TransitionError);
+    expect(() => engine.dispatch("event")).toThrow("test error");
   });
 });
