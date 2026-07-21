@@ -72,4 +72,62 @@ describe("File Runner", () => {
     expect(resultWrongArity.error).toBeTruthy();
     expect(resultWrongArity.error).toMatch(/expects.*arguments/i);
   });
+
+  describe("Task 7: Module system with filesystem resolver", () => {
+    it("runSource with modules and in-memory resolver", () => {
+      const sources = {
+        helpers: `
+          let double = fn(x) -> x * 2
+          0
+        `,
+        "entry": `
+          import "helpers" as h
+          [1, 2, 3] |> map(h.double)
+        `
+      };
+      const resolver = (path: string) => {
+        if (sources[path]) return sources[path];
+        throw new Error(`Unknown import: ${path}`);
+      };
+      const result = runSource(sources["entry"], {
+        resolve: resolver,
+        path: "entry"
+      });
+      expect(result.output).toBe("[2, 4, 6]");
+      expect(result.error).toBeFalsy();
+    });
+
+    it("runSource with module type definitions", () => {
+      const sources = {
+        "types": `
+          type Status = Active | Inactive
+          0
+        `,
+        "entry": `
+          import "types" as t
+          match Active { Active -> "on", Inactive -> "off" }
+        `
+      };
+      const resolver = (path: string) => {
+        if (sources[path]) return sources[path];
+        throw new Error(`Unknown import: ${path}`);
+      };
+      const result = runSource(sources["entry"], {
+        resolve: resolver,
+        path: "entry"
+      });
+      expect(result.output).toBe("\"on\"");
+      expect(result.error).toBeFalsy();
+    });
+
+    it("runSource without resolver reports clear error on imports", () => {
+      const source = `
+        import "helpers" as h
+        [1, 2, 3] |> map(h.double)
+      `;
+      const result = runSource(source);
+      expect(result.error).toBeTruthy();
+      expect(result.error).toMatch(/import|resolver/i);
+    });
+  });
 });

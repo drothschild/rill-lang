@@ -7,7 +7,7 @@ export type { Program, RuleHeader, RuleParam } from './parser';
 export { checkRuleSource } from './rules';
 export type { RuleCheckResult, CheckRuleOptions } from './rules';
 export { Value, prettyPrint } from './values';
-export { runSource } from './runner';
+export { runSource, createFsResolver } from './runner';
 
 // Module system API for embedders.
 export type { Resolver } from './modules';

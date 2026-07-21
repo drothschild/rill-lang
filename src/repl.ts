@@ -70,6 +70,11 @@ export class ReplSession {
       const augmented = `${input}\n${dummyBody}`;
       const program = parseProgram(lex(augmented));
 
+      // Check if program has imports (not allowed in REPL without resolver context)
+      if (program.imports.length > 0) {
+        return { error: "imports are not allowed in the REPL; use a file instead" };
+      }
+
       // Extract the declaration
       if (program.declarations.length === 0) {
         return { error: "No declaration found" };
