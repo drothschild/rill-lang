@@ -328,3 +328,57 @@ describe("Tag unification", () => {
     expect(() => unify(t1, t2)).toThrow(/arity/);
   });
 });
+
+describe("Union unification", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("unifies identical unions without arguments", () => {
+    const t1: Type = { kind: "TUnion", name: "Phase", args: [] };
+    const t2: Type = { kind: "TUnion", name: "Phase", args: [] };
+    const subst = unify(t1, t2);
+    expect(subst.size).toBe(0);
+  });
+
+  it("unifies identical unions with concrete arguments", () => {
+    const t1: Type = {
+      kind: "TUnion",
+      name: "Option",
+      args: [{ kind: "TCon", name: "Int" }],
+    };
+    const t2: Type = {
+      kind: "TUnion",
+      name: "Option",
+      args: [{ kind: "TCon", name: "Int" }],
+    };
+    const subst = unify(t1, t2);
+    expect(subst.size).toBe(0);
+  });
+
+  it("unifies unions with type variables", () => {
+    const a = freshTypeVar() as { kind: "TVar"; id: number };
+    const t1: Type = { kind: "TUnion", name: "Option", args: [a] };
+    const t2: Type = {
+      kind: "TUnion",
+      name: "Option",
+      args: [{ kind: "TCon", name: "Int" }],
+    };
+    const subst = unify(t1, t2);
+    expect(applySubst(subst, a)).toEqual({ kind: "TCon", name: "Int" });
+  });
+
+  it("fails on different union names with message naming both", () => {
+    const t1: Type = { kind: "TUnion", name: "Phase", args: [] };
+    const t2: Type = { kind: "TUnion", name: "Event", args: [] };
+    expect(() => unify(t1, t2)).toThrow(/Phase.*Event/);
+  });
+
+  it("fails on same union name with different arity", () => {
+    const t1: Type = { kind: "TUnion", name: "Option", args: [] };
+    const t2: Type = {
+      kind: "TUnion",
+      name: "Option",
+      args: [{ kind: "TCon", name: "Int" }],
+    };
+    expect(() => unify(t1, t2)).toThrow(/arity/);
+  });
+});

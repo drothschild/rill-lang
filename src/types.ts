@@ -7,7 +7,8 @@ export type Type =
   | { kind: "TRecord"; fields: Map<string, Type>; rest: Type | null }
   | { kind: "TResult"; ok: Type }
   | { kind: "TTag"; tag: string; args: Type[] }
-  | { kind: "TUnion"; name: string; args: Type[] };
+  | { kind: "TUnion"; name: string; args: Type[] }
+  | { kind: "TParam"; name: string };
 
 let _nextId = 0;
 export function freshTypeVar(): Type {
@@ -35,6 +36,7 @@ export function prettyType(t: Type): string {
     case "TResult": return `Result(${prettyType(t.ok)}, String)`;
     case "TTag": return t.args.length === 0 ? t.tag : `${t.tag}(${t.args.map(prettyType).join(", ")})`;
     case "TUnion": return t.args.length === 0 ? t.name : `${t.name}(${t.args.map(prettyType).join(", ")})`;
+    case "TParam": return t.name;
   }
 }
 
@@ -54,5 +56,8 @@ export const T = {
       fields: new Map(Object.entries(fields)),
       rest: open ? freshTypeVar() : null,
     };
+  },
+  union(name: string, args: Type[] = []): Type {
+    return { kind: "TUnion", name, args };
   },
 };
