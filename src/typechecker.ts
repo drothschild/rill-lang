@@ -1,4 +1,4 @@
-import { Expr, Program } from "./ast";
+import { Expr } from "./ast";
 import { Type, freshTypeVar, prettyType } from "./types";
 import { Substitution, unify, applySubst } from "./unify";
 import { RillError } from "./errors";
