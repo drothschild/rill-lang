@@ -91,6 +91,32 @@ describe("Type Inference", () => {
       expect(typeOf('let r = { name: "Alice" } in r.name')).toBe("String");
     });
 
+    it("infers record update type — same as base", () => {
+      const t = typeOf('let s = { phase: true, setIndex: 0 } in { s | phase: false }');
+      expect(t).toContain("phase: Bool");
+      expect(t).toContain("setIndex: Int");
+    });
+
+    it("infers record update preserves row polymorphism in helpers", () => {
+      const t = typeOf('fn(s) -> { s | n: 0 }');
+      // Result should be a function type, and the return type should show an open row (with |)
+      expect(t).toMatch(/-> {.*\|/);
+    });
+
+    it("rejects record update on closed record with absent field", () => {
+      expect(() => typeOf('let s = { a: 1 } in { s | b: 2 }')).toThrow(/field|absent|No field/i);
+    });
+
+    it("rejects record update with type mismatch on field", () => {
+      expect(() => typeOf('let s = { a: 1 } in { s | a: "x" }')).toThrow();
+    });
+
+    it("infers record update with multiple fields", () => {
+      const t = typeOf('let s = { a: 1, b: 2 } in { s | a: 10, b: 20 }');
+      expect(t).toContain("a: Int");
+      expect(t).toContain("b: Int");
+    });
+
     it("infers tagged value type", () => {
       expect(typeOf("Ok(42)")).toBe("Result(Int)");
     });

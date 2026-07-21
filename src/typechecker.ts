@@ -232,6 +232,46 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution, declEnv: DeclE
       return [{ kind: "TRecord", fields, rest: null }, s];
     }
 
+    case "RecordUpdate": {
+      // 1. Look up base identifier's type
+      const scheme = env.get(expr.base);
+      if (!scheme) {
+        throw typeError(`Undefined identifier: ${expr.base}`, expr.baseSpan);
+      }
+      const baseT = instantiate(scheme);
+
+      // 2. For each updated field, create a fresh var and build constraint record
+      const constraintFields = new Map<string, Type>();
+      for (const field of expr.fields) {
+        constraintFields.set(field.name, freshTypeVar());
+      }
+      const constraintRecord: Type = {
+        kind: "TRecord",
+        fields: constraintFields,
+        rest: freshTypeVar(),
+      };
+
+      // Unify base type with constraint record
+      let s = unify(baseT, constraintRecord, subst);
+      const baseResolved = applySubst(s, baseT);
+
+      // 3. Infer each value and unify with corresponding field type
+      for (const field of expr.fields) {
+        const [valueT, si] = inferExpr(field.value, env, s, declEnv);
+        if (baseResolved.kind === "TRecord") {
+          const fieldT = baseResolved.fields.get(field.name);
+          if (fieldT) {
+            s = unify(valueT, fieldT, si);
+          }
+        } else {
+          s = si;
+        }
+      }
+
+      // 4. Return base type after substitution
+      return [applySubst(s, baseT), s];
+    }
+
     case "FieldAccess": {
       const [recT, s1] = inferExpr(expr.expr, env, subst, declEnv);
       const resolved = applySubst(s1, recT);
