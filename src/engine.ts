@@ -7,6 +7,7 @@ import { createPrelude } from "./prelude";
 import { evaluate } from "./evaluator";
 import { Expr } from "./ast";
 import { lex } from "./lexer";
+import { resolveTypeAnn, DeclEnv } from "./decls";
 
 /**
  * Configuration for creating a state machine engine.
@@ -85,13 +86,32 @@ export function createEngine<State, Event>(
     );
   }
 
+  // Parse and load the module graph to get declaration environment
+  const moduleGraph = loadModules(entrySource, config.entry, config.resolve);
+  const declEnv = buildGraphDeclEnv(moduleGraph);
+  const prelude = createPrelude();
+
   // Validate return type is Result
   if (!header.returnType || header.returnType.kind !== "TUnion" || header.returnType.name !== "Result") {
     throw new Error("Entry rule must return a Result type");
   }
 
-  // Validate Result has state and effects fields
-  const resultPayload = header.returnType.args[0];
+  // Resolve the Result's payload type to handle aliases like Result(SomeAlias)
+  let resolvedReturnType;
+  try {
+    resolvedReturnType = resolveTypeAnn(header.returnType, declEnv);
+  } catch (error) {
+    throw new Error(
+      `Failed to resolve return type: ${error instanceof Error ? error.message : String(error)}`
+    );
+  }
+
+  // Validate resolved return type is still Result with record payload
+  if (!resolvedReturnType || resolvedReturnType.kind !== "TUnion" || resolvedReturnType.name !== "Result") {
+    throw new Error("Entry rule must return a Result type");
+  }
+
+  const resultPayload = resolvedReturnType.args[0];
   if (!resultPayload || resultPayload.kind !== "TRecord") {
     throw new Error("Result return type must have a record payload with state and effects fields");
   }
@@ -100,10 +120,19 @@ export function createEngine<State, Event>(
     throw new Error("Result record must have exactly state and effects fields");
   }
 
-  // Parse and load the module graph to get declaration environment
-  const moduleGraph = loadModules(entrySource, config.entry, config.resolve);
-  const declEnv = buildGraphDeclEnv(moduleGraph);
-  const prelude = createPrelude();
+  // Resolve parameter types to handle aliases
+  const resolvedParams: Array<{ name: string; type: ReturnType<typeof resolveTypeAnn> }> = [];
+  for (const param of header.params) {
+    let resolvedParamType;
+    try {
+      resolvedParamType = resolveTypeAnn(param.type, declEnv);
+    } catch (error) {
+      throw new Error(
+        `Failed to resolve parameter type for ${param.name}: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+    resolvedParams.push({ name: param.name, type: resolvedParamType });
+  }
 
   // Build import aliases map from the entry rule's imports
   const program = parseProgram(lex(entrySource));
@@ -136,9 +165,9 @@ export function createEngine<State, Event>(
       return currentState;
     },
     dispatch(event: Event): State {
-      // Convert state and event via jsToRill against header param types
-      const stateParam = header.params[0];
-      const eventParam = header.params[1];
+      // Convert state and event via jsToRill against resolved param types
+      const stateParam = resolvedParams[0];
+      const eventParam = resolvedParams[1];
 
       let rillState: Value;
       let rillEvent: Value;

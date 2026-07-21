@@ -93,6 +93,75 @@ describe("Task 4: createEngine construction gate", () => {
       expect(engine.getState()).toBe(42);
     });
   });
+
+  describe("alias resolution", () => {
+    it("constructs engine when return type is Result(alias) that resolves to record with state and effects", () => {
+      const config: EngineConfig<number, { n: number }> = {
+        resolve: () => `
+          type Ev = Go({ n: Int }) | Stop
+          type Eff = Ping
+          alias St = { count: Int }
+          alias TR = { state: St, effects: List(Eff) }
+          rule transition(state: St, event: Ev) -> Result(TR)
+          match event {
+            Go(p) -> Ok({ state: { state | count: state.count + p.n }, effects: [Ping] }),
+            Stop -> Ok({ state: state, effects: [] })
+          }
+        `,
+        entry: "transition.rill",
+        initialState: { count: 0 },
+        executors: { Ping: () => {} },
+      };
+
+      const engine = createEngine(config);
+      expect(engine.getState()).toEqual({ count: 0 });
+    });
+
+    it("dispatches correctly with aliased return type and union event type", () => {
+      const pingCalls: any[] = [];
+      const config: EngineConfig<{ count: number }, { tag: string; value?: any }> = {
+        resolve: () => `
+          type Ev = Go({ n: Int }) | Stop
+          type Eff = Ping
+          alias St = { count: Int }
+          alias TR = { state: St, effects: List(Eff) }
+          rule transition(state: St, event: Ev) -> Result(TR)
+          match event {
+            Go(p) -> Ok({ state: { state | count: state.count + p.n }, effects: [Ping] }),
+            Stop -> Ok({ state: state, effects: [] })
+          }
+        `,
+        entry: "transition.rill",
+        initialState: { count: 1 },
+        executors: { Ping: (payload) => pingCalls.push(payload) },
+      };
+
+      const engine = createEngine(config);
+      const result = engine.dispatch({ tag: "Go", value: { n: 4 } });
+      expect(result).toEqual({ count: 5 });
+      expect(engine.getState()).toEqual({ count: 5 });
+      expect(pingCalls).toHaveLength(1);
+      expect(pingCalls[0]).toBeUndefined();
+    });
+
+    it("constructs engine with nested alias in state type", () => {
+      const config: EngineConfig<{ current: { n: number } }, string> = {
+        resolve: () => `
+          alias Inner = { n: Int }
+          alias St = { current: Inner }
+          alias TR = { state: St, effects: List(Unit) }
+          rule transition(state: St, event: String) -> Result(TR)
+          Ok({ state: state, effects: [] })
+        `,
+        entry: "transition.rill",
+        initialState: { current: { n: 42 } },
+        executors: {},
+      };
+
+      const engine = createEngine(config);
+      expect(engine.getState()).toEqual({ current: { n: 42 } });
+    });
+  });
 });
 
 describe("Task 5: dispatch — state swap, executor fan-out, and Err preservation", () => {
