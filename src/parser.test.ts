@@ -391,6 +391,60 @@ describe("Parser", () => {
         ],
       });
     });
+
+    it("parses match with guard on first case", () => {
+      const ast = parseExpr("match e { Some(x) if x > 0 -> x, _ -> 0 }");
+      expect(ast).toMatchObject({
+        kind: "Match",
+        cases: [
+          {
+            pattern: { kind: "TagPat", tag: "Some" },
+            guard: { kind: "BinOp", op: ">" },
+            body: { kind: "Ident", name: "x" },
+          },
+          {
+            pattern: { kind: "WildcardPat" },
+            body: { kind: "IntLit", value: 0 },
+          },
+        ],
+      });
+    });
+
+    it("parses match with guard and verifies no guard present in second case", () => {
+      const ast = parseExpr("match e { Some(x) if x > 0 -> x, None -> 1 }");
+      if (ast.kind === "Match") {
+        expect(ast.cases[0].guard).toBeDefined();
+        expect(ast.cases[1].guard).toBeUndefined();
+      }
+    });
+
+    it("parses guard-less match unchanged", () => {
+      const ast = parseExpr("match x { Some(y) -> y + 1, None -> 0 }");
+      expect(ast).toMatchObject({
+        kind: "Match",
+        cases: [
+          { pattern: { kind: "TagPat", tag: "Some" } },
+          { pattern: { kind: "TagPat", tag: "None" } },
+        ],
+      });
+      if (ast.kind === "Match") {
+        expect(ast.cases[0].guard).toBeUndefined();
+        expect(ast.cases[1].guard).toBeUndefined();
+      }
+    });
+
+    it("rejects guard with ? operator", () => {
+      expect(() => parseExpr("match e { Some(x) if f(x)? -> 1, _ -> 0 }")).toThrow(
+        /guards may not use the \? operator/
+      );
+    });
+
+    it("parses match body as if-expression when present", () => {
+      const ast = parseExpr("match x { Some(y) -> if y > 0 then 1 else 2, _ -> 0 }");
+      if (ast.kind === "Match") {
+        expect(ast.cases[0].body.kind).toBe("If");
+      }
+    });
   });
 
   describe("data structures", () => {

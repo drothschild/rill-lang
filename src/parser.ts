@@ -569,11 +569,18 @@ class Parser {
     };
   }
 
-  parseMatchCase(): { pattern: import("./ast").Pattern; body: Expr } {
+  parseMatchCase(): { pattern: import("./ast").Pattern; guard?: Expr; body: Expr } {
     const pattern = this.parsePattern();
+    let guard: Expr | undefined;
+    if (this.at(TokenKind.If)) {
+      this.advance(); // consume 'if'
+      guard = this.parseExpr(0);
+      // Reject any Try (?) operators in the guard
+      checkNoTryInGuard(guard);
+    }
     this.expect(TokenKind.Arrow);
     const body = this.parseExpr(0);
-    return { pattern, body };
+    return { pattern, guard, body };
   }
 
   parseIf(): Expr {
@@ -750,5 +757,80 @@ function tokenToOp(kind: TokenKind): string {
     case TokenKind.AmpAmp: return "&&";
     case TokenKind.PipePipe: return "||";
     default: throw new Error(`Unknown operator token: ${kind}`);
+  }
+}
+
+// Walk an expression tree to find Try nodes (? operator) and reject them with an error
+function checkNoTryInGuard(expr: Expr): void {
+  switch (expr.kind) {
+    case "Try": {
+      throw new Error(
+        `guards may not use the ? operator at line ${expr.span.start.line}, col ${expr.span.start.col}`
+      );
+    }
+    case "BinOp":
+      checkNoTryInGuard(expr.left);
+      checkNoTryInGuard(expr.right);
+      break;
+    case "UnaryOp":
+      checkNoTryInGuard(expr.expr);
+      break;
+    case "Call":
+      checkNoTryInGuard(expr.fn);
+      checkNoTryInGuard(expr.arg);
+      break;
+    case "Pipe":
+      checkNoTryInGuard(expr.left);
+      checkNoTryInGuard(expr.right);
+      break;
+    case "Let":
+      checkNoTryInGuard(expr.value);
+      checkNoTryInGuard(expr.body);
+      break;
+    case "Fn":
+      checkNoTryInGuard(expr.body);
+      break;
+    case "Match":
+      checkNoTryInGuard(expr.subject);
+      for (const c of expr.cases) {
+        if (c.guard) checkNoTryInGuard(c.guard);
+        checkNoTryInGuard(c.body);
+      }
+      break;
+    case "If":
+      checkNoTryInGuard(expr.cond);
+      checkNoTryInGuard(expr.then);
+      checkNoTryInGuard(expr.else_);
+      break;
+    case "List":
+      for (const elem of expr.elements) {
+        checkNoTryInGuard(elem);
+      }
+      break;
+    case "Tuple":
+      for (const elem of expr.elements) {
+        checkNoTryInGuard(elem);
+      }
+      break;
+    case "Record":
+      for (const field of expr.fields) {
+        checkNoTryInGuard(field.value);
+      }
+      break;
+    case "FieldAccess":
+      checkNoTryInGuard(expr.expr);
+      break;
+    case "Tag":
+      for (const arg of expr.args) {
+        checkNoTryInGuard(arg);
+      }
+      break;
+    case "Catch":
+      checkNoTryInGuard(expr.expr);
+      checkNoTryInGuard(expr.fallback);
+      break;
+    // Leaf nodes: IntLit, FloatLit, StringLit, BoolLit, UnitLit, Ident
+    default:
+      break;
   }
 }

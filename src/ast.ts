@@ -127,6 +127,7 @@ export interface Match {
 
 export interface MatchCase {
   pattern: Pattern;
+  guard?: Expr;
   body: Expr;
 }
 
