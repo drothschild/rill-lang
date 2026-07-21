@@ -319,4 +319,32 @@ describe("Task 5: dispatch — state swap, executor fan-out, and Err preservatio
       expect(engine.getState()).toBe(1); // State was swapped before executor threw
     });
   });
+
+  describe("multi-module dispatch (CRITICAL 1: imported module values)", () => {
+    it("entry rule can import and use helper module bindings", () => {
+      const config: EngineConfig<number, number> = {
+        resolve: (path: string, fromPath?: string) => {
+          if (path === "helpers") {
+            return `
+              let increment = 1
+              increment
+            `;
+          }
+          return `
+            import "helpers" as h
+            rule transition(state: Int, event: Int) -> Result({ state: Int, effects: List(Unit) })
+            Ok({ state: state + h.increment + event, effects: [] })
+          `;
+        },
+        entry: "transition",
+        initialState: 10,
+        executors: {},
+      };
+
+      const engine = createEngine(config);
+      const result = engine.dispatch(5);
+      expect(result).toBe(16); // 10 + 1 (increment) + 5
+      expect(engine.getState()).toBe(16);
+    });
+  });
 });

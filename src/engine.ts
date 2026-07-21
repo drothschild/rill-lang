@@ -1,6 +1,6 @@
 import { checkRuleSource } from "./rules";
 import { RuleHeader, parseProgram } from "./parser";
-import { Resolver, loadModules, buildGraphDeclEnv } from "./modules";
+import { Resolver, loadModules, buildGraphDeclEnv, evaluateModuleGraph } from "./modules";
 import { jsToRill, rillToJs } from "./bridge";
 import { Value } from "./values";
 import { createPrelude } from "./prelude";
@@ -105,11 +105,27 @@ export function createEngine<State, Event>(
   const declEnv = buildGraphDeclEnv(moduleGraph);
   const prelude = createPrelude();
 
-  // Extract the rule body expression from the parsed program
+  // Build import aliases map from the entry rule's imports
   const program = parseProgram(lex(entrySource));
   if (!program.body) {
     throw new Error("Entry rule has no body expression");
   }
+  const importAliasMap = new Map<string, string>();
+  for (const importDecl of program.imports) {
+    importAliasMap.set(importDecl.alias, importDecl.path);
+  }
+
+  // Evaluate only helper modules, excluding the entry rule module itself
+  const helperGraph = {
+    modules: new Map(
+      [...moduleGraph.modules.entries()].filter(([path]) => path !== config.entry)
+    ),
+    order: moduleGraph.order.filter((path) => path !== config.entry),
+  };
+  const moduleValues = helperGraph.order.length > 0
+    ? evaluateModuleGraph(helperGraph, prelude)
+    : new Map<string, Map<string, Value>>();
+
   const ruleBody = program.body;
 
   // Store the header and initial state for dispatch
@@ -140,6 +156,15 @@ export function createEngine<State, Event>(
       try {
         // Create environment with parameters bound by name
         const env = new Map(prelude);
+
+        // Add module bindings from evaluated imports
+        for (const [alias, path] of importAliasMap.entries()) {
+          const moduleRecord = moduleValues.get(path);
+          if (moduleRecord) {
+            env.set(alias, { kind: "Record", fields: moduleRecord });
+          }
+        }
+
         env.set(stateParam.name, rillState);
         env.set(eventParam.name, rillEvent);
 

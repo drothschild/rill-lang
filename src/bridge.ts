@@ -62,11 +62,10 @@ export function rillToJs(value: Value): unknown {
         };
       }
 
-      // Multiple args: put them all in value as an array
-      return {
-        tag: value.tag,
-        value: value.args.map(rillToJs),
-      };
+      // Multiple args are not supported at the bridge
+      throw new Error(
+        `Multi-payload constructors are unsupported at the bridge. Constructor "${value.tag}" has ${value.args.length} arguments.`
+      );
     }
 
     case "List":
@@ -183,12 +182,8 @@ function jsToRillWithResolved(
         "tag" in value &&
         typeof (value as any).tag === "string";
 
-      // Special handling for Option when value is NOT in union format
-      if (
-        !isUnionFormatted &&
-        declaredType.name === "Option" &&
-        declaredType.args.length === 1
-      ) {
+      // Special handling for Option type (before checking union format)
+      if (declaredType.name === "Option" && declaredType.args.length === 1) {
         // Check for nested Option
         const innerType = declaredType.args[0];
         if (
@@ -200,11 +195,47 @@ function jsToRillWithResolved(
           );
         }
 
+        // For Option, decide the branch based on the value:
+        // - Explicit undefined/null → None
+        // - Union-formatted {tag: "None"} → None (already in union representation)
+        // - Union-formatted {tag: "Some", value: x} → Some(x) (already in union representation)
+        // - Union-formatted {tag: <other>, ...} → Some(converted value) for union inner types
+        // - Any other present value → Some(converted value)
+
         if (value === undefined || value === null) {
           return { kind: "Tag", tag: "None", args: [] };
         }
 
-        // Present value: convert against inner type
+        // If the value is already union-formatted, check if it's an Option tag
+        if (isUnionFormatted) {
+          const tag = (value as any).tag;
+          if (tag === "None") {
+            // Explicitly formatted None - return it as-is
+            return { kind: "Tag", tag: "None", args: [] };
+          } else if (tag === "Some") {
+            // Explicitly formatted Some - convert the payload against the inner type
+            const rawPayload = (value as any).value;
+            const payloadValue = jsToRillWithResolved(
+              rawPayload,
+              innerType,
+              declEnv,
+              fieldPath
+            );
+            return { kind: "Tag", tag: "Some", args: [payloadValue] };
+          } else {
+            // It's a union-formatted non-Option tag (like {tag: "Active"})
+            // Treat this as Some(converted value)
+            const innerValue = jsToRillWithResolved(
+              value,
+              innerType,
+              declEnv,
+              fieldPath
+            );
+            return { kind: "Tag", tag: "Some", args: [innerValue] };
+          }
+        }
+
+        // Not union-formatted or not present: convert against inner type and wrap in Some
         const innerValue = jsToRillWithResolved(
           value,
           innerType,
@@ -214,7 +245,7 @@ function jsToRillWithResolved(
         return { kind: "Tag", tag: "Some", args: [innerValue] };
       }
 
-      // General union handling (union format or non-Option)
+      // General union handling (non-Option unions or explicitly-formatted Option tags)
       if (typeof value !== "object" || value === null) {
         throw new BridgeError(
           `Expected object with tag at ${fieldPath}, got ${typeof value}`

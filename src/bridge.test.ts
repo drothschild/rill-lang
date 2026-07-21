@@ -636,6 +636,142 @@ describe("jsToRill - type-directed inbound conversion", () => {
       }
     });
   });
+
+  describe("Option(Union) round-trip (CRITICAL 2 and IMPORTANT 2)", () => {
+    it("round-trips Some(union-tagged-value)", () => {
+      // Create a custom declEnv with a Status union
+      const customDeclEnv: DeclEnv = {
+        unions: new Map([
+          ...declEnv.unions,
+          ["Status", { name: "Status", params: [], ctors: ["Active", "Inactive"] }],
+        ]),
+        ctors: new Map([
+          ...declEnv.ctors,
+          ["Active", { union: "Status", typeParams: [], payload: null }],
+          ["Inactive", { union: "Status", typeParams: [], payload: null }],
+        ]),
+        aliases: declEnv.aliases,
+      };
+
+      // Build Rill value: Some(Active)
+      const original: Value = {
+        kind: "Tag",
+        tag: "Some",
+        args: [
+          {
+            kind: "Tag",
+            tag: "Active",
+            args: [],
+          },
+        ],
+      };
+
+      // Convert to JS - should unwrap Some and give {tag:"Active"}
+      const js = rillToJs(original);
+      expect(js).toEqual({ tag: "Active" });
+
+      // Round-trip back - jsToRill({tag:"Active"}, Option(Status))
+      const roundTrip = jsToRill(
+        js,
+        T.union("Option", [T.union("Status", [])]),
+        customDeclEnv,
+        "field"
+      );
+
+      expect(roundTrip).toEqual(original);
+    });
+
+    it("round-trips None", () => {
+      const original: Value = {
+        kind: "Tag",
+        tag: "None",
+        args: [],
+      };
+
+      const js = rillToJs(original);
+      expect(js).toBeUndefined();
+
+      const roundTrip = jsToRill(
+        js,
+        T.union("Option", [T.union("Result", [T.Int])]),
+        declEnv,
+        "x"
+      );
+
+      expect(roundTrip).toEqual(original);
+    });
+
+    it("rounds-trip record field with Option(Union) type", () => {
+      const customDeclEnv: DeclEnv = {
+        unions: new Map([
+          ...declEnv.unions,
+          ["Status", { name: "Status", params: [], ctors: ["Active", "Inactive"] }],
+        ]),
+        ctors: new Map([
+          ...declEnv.ctors,
+          ["Active", { union: "Status", typeParams: [], payload: null }],
+          ["Inactive", { union: "Status", typeParams: [], payload: null }],
+        ]),
+        aliases: declEnv.aliases,
+      };
+
+      const original: Value = {
+        kind: "Record",
+        fields: new Map([
+          ["id", { kind: "Int", value: 1 }],
+          [
+            "status",
+            {
+              kind: "Tag",
+              tag: "Some",
+              args: [
+                {
+                  kind: "Tag",
+                  tag: "Active",
+                  args: [],
+                },
+              ],
+            },
+          ],
+        ]),
+      };
+
+      const js = rillToJs(original);
+      expect(js).toEqual({ id: 1, status: { tag: "Active" } });
+
+      const roundTrip = jsToRill(
+        js,
+        T.record({
+          id: T.Int,
+          status: T.union("Option", [T.union("Status", [])]),
+        }),
+        customDeclEnv,
+        "record"
+      );
+
+      expect(roundTrip).toEqual(original);
+    });
+  });
+
+  describe("multi-arg Tag error (MINOR 1)", () => {
+    it("throws clear error for multi-arg tag instead of [ ] array shape", () => {
+      // Multi-arg tags are not supported at the bridge
+      // This tests that we throw a clear error rather than silently creating a non-round-trippable shape
+      const multiArgTag: Value = {
+        kind: "Tag",
+        tag: "Triple",
+        args: [
+          { kind: "Int", value: 1 },
+          { kind: "Int", value: 2 },
+          { kind: "Int", value: 3 },
+        ],
+      };
+
+      expect(() => {
+        rillToJs(multiArgTag);
+      }).toThrow(/multi.*payload|constructor.*unsupported|multiple.*arg/i);
+    });
+  });
 });
 
 describe("BridgeError class", () => {
