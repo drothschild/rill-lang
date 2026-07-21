@@ -213,6 +213,7 @@ export function lex(source: string): Token[] {
       case ".": emit(TokenKind.Dot, ".", startLine, startCol, startOffset); break;
       case ":": emit(TokenKind.Colon, ":", startLine, startCol, startOffset); break;
       case "_": emit(TokenKind.Underscore, "_", startLine, startCol, startOffset); break;
+      case "|": emit(TokenKind.Bar, "|", startLine, startCol, startOffset); break;
       default:
         throw new Error(`Unexpected character '${ch}' at line ${startLine}, col ${startCol}`);
     }

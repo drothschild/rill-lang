@@ -46,6 +46,7 @@ export enum TokenKind {
   Bang = "Bang",
   Arrow = "Arrow",
   Pipe = "Pipe",
+  Bar = "Bar",
   Question = "Question",
 
   // Delimiters

@@ -1,5 +1,5 @@
 import { Token, TokenKind } from "./token";
-import { Expr, Declaration } from "./ast";
+import { Expr, Declaration, TypeDecl, AliasDecl, ConstructorDef } from "./ast";
 import { Span } from "./span";
 import { Type, freshTypeVar } from "./types";
 
@@ -31,10 +31,21 @@ export interface Program {
 // followed by the body expression. Headerless sources parse exactly as parse().
 export function parseProgram(tokens: Token[]): Program {
   const parser = new Parser(tokens);
+  const declarations: Declaration[] = [];
+
+  // Parse declarations (type and alias)
+  while (parser.at(TokenKind.Type) || parser.at(TokenKind.Alias)) {
+    if (parser.at(TokenKind.Type)) {
+      declarations.push(parser.parseTypeDecl());
+    } else {
+      declarations.push(parser.parseAliasDecl());
+    }
+  }
+
   const header = parser.at(TokenKind.Rule) ? parser.parseRuleHeader() : null;
   const body = parser.parseExpr(0);
   parser.expect(TokenKind.EOF);
-  return { declarations: [], header, body };
+  return { declarations, header, body };
 }
 
 class Parser {
@@ -360,9 +371,85 @@ class Parser {
     return { name, type: this.parseTypeAnn() };
   }
 
-  parseTypeAnn(): Type {
+  parseTypeDecl(): TypeDecl {
+    const startToken = this.expect(TokenKind.Type);
+    const name = this.expect(TokenKind.UpperIdent).lexeme;
+
+    // Parse optional type parameters: (a, b, c)
+    const params: string[] = [];
+    if (this.eat(TokenKind.LParen)) {
+      if (!this.at(TokenKind.RParen)) {
+        params.push(this.expect(TokenKind.Ident).lexeme);
+        while (this.eat(TokenKind.Comma)) {
+          if (this.at(TokenKind.RParen)) break;
+          params.push(this.expect(TokenKind.Ident).lexeme);
+        }
+      }
+      this.expect(TokenKind.RParen);
+    }
+
+    this.expect(TokenKind.Eq);
+
+    // Parse constructors: [|] Ctor | Ctor | ...
+    const constructors: ConstructorDef[] = [];
+    this.eat(TokenKind.Bar); // optional leading |
+
+    constructors.push(this.parseConstructor());
+    while (this.eat(TokenKind.Bar)) {
+      constructors.push(this.parseConstructor());
+    }
+
+    const span = this.spanFrom(startToken.span);
+    return { kind: "TypeDecl", name, params, constructors, span };
+  }
+
+  parseConstructor(): ConstructorDef {
+    const token = this.expect(TokenKind.UpperIdent);
+    const name = token.lexeme;
+    let payload: Type | null = null;
+
+    if (this.at(TokenKind.LParen)) {
+      this.advance(); // consume (
+      payload = this.parseTypeAnn();
+      this.expect(TokenKind.RParen);
+    }
+
+    return { name, payload, span: token.span };
+  }
+
+  parseAliasDecl(): AliasDecl {
+    const startToken = this.expect(TokenKind.Alias);
+    const name = this.expect(TokenKind.UpperIdent).lexeme;
+
+    // Parse optional type parameters: (a, b, c)
+    const params: string[] = [];
+    if (this.eat(TokenKind.LParen)) {
+      if (!this.at(TokenKind.RParen)) {
+        params.push(this.expect(TokenKind.Ident).lexeme);
+        while (this.eat(TokenKind.Comma)) {
+          if (this.at(TokenKind.RParen)) break;
+          params.push(this.expect(TokenKind.Ident).lexeme);
+        }
+      }
+      this.expect(TokenKind.RParen);
+    }
+
+    this.expect(TokenKind.Eq);
+    const type = this.parseTypeAnn();
+
+    const span = this.spanFrom(startToken.span);
+    return { kind: "AliasDecl", name, params, type, span };
+  }
+
+  parseTypeAnn(activeParams?: string[]): Type {
     const token = this.peek();
     switch (token.kind) {
+      case TokenKind.Ident: {
+        // Type parameter placeholder (will be replaced with TParam in Task 5)
+        // For now, just use the identifier name
+        const name = this.advance().lexeme;
+        return { kind: "TCon", name };
+      }
       case TokenKind.UpperIdent: {
         this.advance();
         switch (token.lexeme) {

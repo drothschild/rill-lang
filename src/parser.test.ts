@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parse } from "./parser";
+import { parse, parseProgram } from "./parser";
 import { lex } from "./lexer";
 import { prettyPrint } from "./values";
 
@@ -616,6 +616,89 @@ describe("Parser", () => {
       expect(() => parseExpr("if x { 1 } else { 2 }")).toThrow(
         /Expected 'then' after if condition/
       );
+    });
+  });
+
+  describe("declarations", () => {
+    function parseProgWithDecls(source: string) {
+      return parseProgram(lex(source));
+    }
+
+    it("parses type declarations with payload-less constructors", () => {
+      const prog = parseProgWithDecls("type Phase = Idle | Warmup | Working\n42");
+      expect(prog.declarations).toHaveLength(1);
+      expect(prog.declarations[0]).toMatchObject({
+        kind: "TypeDecl",
+        name: "Phase",
+        params: [],
+        constructors: [
+          { name: "Idle", payload: null },
+          { name: "Warmup", payload: null },
+          { name: "Working", payload: null },
+        ],
+      });
+      expect(prog.body).toMatchObject({ kind: "IntLit", value: 42 });
+    });
+
+    it("parses type declarations with payload constructors", () => {
+      const prog = parseProgWithDecls(
+        'type Event = | StartSession({ sessionId: String }) | SetDone({ nowMs: Int })\n42'
+      );
+      expect(prog.declarations).toHaveLength(1);
+      const decl = prog.declarations[0];
+      expect(decl).toMatchObject({
+        kind: "TypeDecl",
+        name: "Event",
+        params: [],
+        constructors: [
+          { name: "StartSession" },
+          { name: "SetDone" },
+        ],
+      });
+      // Payload is a TRecord, check loosely
+      expect((decl as any).constructors[0].payload).toBeDefined();
+      expect((decl as any).constructors[0].payload.kind).toBe("TRecord");
+    });
+
+    it("parses type declarations with type parameters", () => {
+      const prog = parseProgWithDecls("type Option(a) = Some(a) | None\n42");
+      expect(prog.declarations).toHaveLength(1);
+      const decl = prog.declarations[0];
+      expect(decl).toMatchObject({
+        kind: "TypeDecl",
+        name: "Option",
+        params: ["a"],
+      });
+      expect((decl as any).constructors).toHaveLength(2);
+      expect((decl as any).constructors[0]).toMatchObject({
+        name: "Some",
+      });
+      expect((decl as any).constructors[1]).toMatchObject({
+        name: "None",
+        payload: null,
+      });
+    });
+
+    it("parses alias declarations", () => {
+      const prog = parseProgWithDecls("alias SessionState = { sessionId: String }\n42");
+      expect(prog.declarations).toHaveLength(1);
+      expect(prog.declarations[0]).toMatchObject({
+        kind: "AliasDecl",
+        name: "SessionState",
+        params: [],
+      });
+      // type is a TRecord
+      expect((prog.declarations[0] as any).type.kind).toBe("TRecord");
+    });
+
+    it("parses declarations followed by rule header and body", () => {
+      const prog = parseProgWithDecls(
+        "type A = B\nrule f(x: Int) -> Int\nx"
+      );
+      expect(prog.declarations).toHaveLength(1);
+      expect(prog.header).toBeDefined();
+      expect(prog.header?.name).toBe("f");
+      expect(prog.body).toMatchObject({ kind: "Ident", name: "x" });
     });
   });
 });
