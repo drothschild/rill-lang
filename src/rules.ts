@@ -51,7 +51,7 @@ export function checkRuleSource(source: string): RuleCheckResult {
     const resolvedParams = [];
     for (const param of header.params) {
       try {
-        const resolvedType = resolveTypeAnn(param.type, declEnv!);
+        const resolvedType = resolveTypeAnn(param.type, declEnv!, undefined, param.span, source);
         resolvedParams.push({ ...param, type: resolvedType });
       } catch (e: unknown) {
         if (e instanceof RillError) {
@@ -64,9 +64,9 @@ export function checkRuleSource(source: string): RuleCheckResult {
 
     // Resolve and validate return type
     let resolvedReturnType = header.returnType;
-    if (header.returnType) {
+    if (header.returnType && header.returnTypeSpan) {
       try {
-        resolvedReturnType = resolveTypeAnn(header.returnType, declEnv!);
+        resolvedReturnType = resolveTypeAnn(header.returnType, declEnv!, undefined, header.returnTypeSpan, source);
       } catch (e: unknown) {
         if (e instanceof RillError) {
           errors.push(e.message);

@@ -344,7 +344,7 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution, declEnv: DeclE
         try {
           s = unify(applySubst(s2, subjT), patT, s2);
         } catch (e: any) {
-          const err = e instanceof RillError ? e : new RillError(e.message, expr.span);
+          const err = e instanceof RillError ? e : new RillError(e.message, expr.span, _source);
           throw err;
         }
         const matchEnv = new Map(env);

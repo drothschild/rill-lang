@@ -212,5 +212,25 @@ describe("rule headers", () => {
       expect(result.ok).toBe(false);
       expect(result.errors[0]).toContain("Stage");
     });
+
+    it("reports source-located errors for unknown header type names", () => {
+      const result = checkRuleSource(`rule f(x: Bogus) -> Int
+  x`);
+      expect(result.ok).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+      // Should include source location with line/col info
+      expect(result.errors[0]).toMatch(/Error at.*line.*col|line.*col/i);
+      expect(result.errors[0]).toContain("Bogus");
+    });
+
+    it("reports source-located errors for unknown return type names", () => {
+      const result = checkRuleSource(`rule f(x: Int) -> UnknownType
+  x`);
+      expect(result.ok).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+      // Should include source location with line/col info
+      expect(result.errors[0]).toMatch(/Error at.*line.*col|line.*col/i);
+      expect(result.errors[0]).toContain("UnknownType");
+    });
   });
 });

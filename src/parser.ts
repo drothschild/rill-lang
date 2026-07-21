@@ -13,12 +13,14 @@ export function parse(tokens: Token[]): Expr {
 export interface RuleParam {
   name: string;
   type: Type;
+  span: Span;
 }
 
 export interface RuleHeader {
   name: string;
   params: RuleParam[];
   returnType: Type | null;
+  returnTypeSpan: Span | null;
 }
 
 export interface Program {
@@ -359,16 +361,22 @@ class Parser {
     }
     this.expect(TokenKind.RParen);
     let returnType: Type | null = null;
+    let returnTypeSpan: Span | null = null;
     if (this.eat(TokenKind.Arrow)) {
+      const startSpan = this.peek().span;
       returnType = this.parseTypeAnn();
+      returnTypeSpan = this.spanFrom(startSpan);
     }
-    return { name, params, returnType };
+    return { name, params, returnType, returnTypeSpan };
   }
 
   parseRuleParam(): RuleParam {
     const name = this.expect(TokenKind.Ident).lexeme;
     this.expect(TokenKind.Colon);
-    return { name, type: this.parseTypeAnn() };
+    const startSpan = this.peek().span;
+    const type = this.parseTypeAnn();
+    const span = this.spanFrom(startSpan);
+    return { name, type, span };
   }
 
   parseTypeDecl(): TypeDecl {

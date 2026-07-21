@@ -40,7 +40,7 @@ export function runSource(source: string): RunResult {
         // Resolve and validate header parameter types
         for (const param of program.header.params) {
           try {
-            const resolvedType = resolveTypeAnn(param.type, declEnv);
+            const resolvedType = resolveTypeAnn(param.type, declEnv, undefined, param.span, source);
             typeEnv = bindType(typeEnv, param.name, resolvedType);
           } catch (e: any) {
             if (e instanceof RillError) {
@@ -52,9 +52,9 @@ export function runSource(source: string): RunResult {
 
         // Resolve return type if present
         let resolvedReturnType = program.header.returnType;
-        if (program.header.returnType) {
+        if (program.header.returnType && program.header.returnTypeSpan) {
           try {
-            resolvedReturnType = resolveTypeAnn(program.header.returnType, declEnv);
+            resolvedReturnType = resolveTypeAnn(program.header.returnType, declEnv, undefined, program.header.returnTypeSpan, source);
           } catch (e: any) {
             if (e instanceof RillError) {
               return { error: e.message };

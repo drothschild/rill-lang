@@ -87,13 +87,14 @@ export function buildDeclEnv(decls: Declaration[], base?: DeclEnv): DeclEnv {
 // union names validate arity; unknown capitalized names throw a RillError with
 // a did-you-mean suggestion. TParam nodes are only legal while resolving a
 // declaration's own annotations (pass the active param list; elsewhere they error).
-export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[], span?: Span): Type {
+export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[], span?: Span, source?: string): Type {
   switch (t.kind) {
     case "TParam": {
       if (!activeParams || !activeParams.includes(t.name)) {
         throw new RillError(
           `Type parameter ${t.name} not in scope`,
-          span
+          span,
+          source
         );
       }
       return t;
@@ -105,7 +106,8 @@ export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[], s
         if (t.args.length !== aliasInfo.params.length) {
           throw new RillError(
             `Alias ${t.name} expects ${aliasInfo.params.length} arguments, got ${t.args.length}`,
-            span
+            span,
+            source
           );
         }
         // Substitute params and recursively resolve
@@ -114,7 +116,7 @@ export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[], s
           substitution.set(aliasInfo.params[i], t.args[i]);
         }
         const expandedType = substituteAliasParams(aliasInfo.type, substitution);
-        return resolveTypeAnn(expandedType, env, activeParams, span);
+        return resolveTypeAnn(expandedType, env, activeParams, span, source);
       }
 
       // Check if it's a union
@@ -123,14 +125,15 @@ export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[], s
         if (t.args.length !== unionInfo.params.length) {
           throw new RillError(
             `Union ${t.name} expects ${unionInfo.params.length} arguments, got ${t.args.length}`,
-            span
+            span,
+            source
           );
         }
         // Recursively resolve args
         return {
           kind: "TUnion",
           name: t.name,
-          args: t.args.map(arg => resolveTypeAnn(arg, env, activeParams, span)),
+          args: t.args.map(arg => resolveTypeAnn(arg, env, activeParams, span, source)),
         };
       }
 
@@ -142,7 +145,8 @@ export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[], s
       const suggestionText = suggestion ? ` (did you mean ${suggestion}?)` : "";
       throw new RillError(
         `Unknown type ${t.name}${suggestionText}`,
-        span
+        span,
+        source
       );
     }
     case "TRecord": {
@@ -151,29 +155,29 @@ export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[], s
         fields: new Map(
           [...t.fields.entries()].map(([k, v]) => [
             k,
-            resolveTypeAnn(v, env, activeParams, span),
+            resolveTypeAnn(v, env, activeParams, span, source),
           ])
         ),
-        rest: t.rest ? resolveTypeAnn(t.rest, env, activeParams, span) : null,
+        rest: t.rest ? resolveTypeAnn(t.rest, env, activeParams, span, source) : null,
       };
     }
     case "TList": {
       return {
         kind: "TList",
-        element: resolveTypeAnn(t.element, env, activeParams, span),
+        element: resolveTypeAnn(t.element, env, activeParams, span, source),
       };
     }
     case "TTuple": {
       return {
         kind: "TTuple",
-        elements: t.elements.map(el => resolveTypeAnn(el, env, activeParams, span)),
+        elements: t.elements.map(el => resolveTypeAnn(el, env, activeParams, span, source)),
       };
     }
     case "TFn": {
       return {
         kind: "TFn",
-        param: resolveTypeAnn(t.param, env, activeParams, span),
-        ret: resolveTypeAnn(t.ret, env, activeParams, span),
+        param: resolveTypeAnn(t.param, env, activeParams, span, source),
+        ret: resolveTypeAnn(t.ret, env, activeParams, span, source),
       };
     }
     case "TCon": {
@@ -182,7 +186,8 @@ export function resolveTypeAnn(t: Type, env: DeclEnv, activeParams?: string[], s
           !["int", "float", "string", "bool", "unit", "list"].includes(t.name)) {
         throw new RillError(
           `Unknown type ${t.name}`,
-          span
+          span,
+          source
         );
       }
       return t;
