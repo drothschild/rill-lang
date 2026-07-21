@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { evaluate } from "./evaluator";
+import { evaluate, evaluateProgram } from "./evaluator";
 import { parse } from "./parser";
+import { parseProgram } from "./parser";
 import { lex } from "./lexer";
 import { prettyPrint, Value } from "./values";
 
@@ -10,6 +11,14 @@ function run(source: string): Value {
 
 function runPrint(source: string): string {
   return prettyPrint(run(source));
+}
+
+function runProgram(source: string): Value {
+  return evaluateProgram(parseProgram(lex(source)));
+}
+
+function runProgramPrint(source: string): string {
+  return prettyPrint(runProgram(source));
 }
 
 describe("Evaluator", () => {
@@ -371,6 +380,35 @@ describe("Evaluator", () => {
     it("still evaluates the right side when needed", () => {
       expect(runPrint("true && false")).toBe("false");
       expect(runPrint("false || true")).toBe("true");
+    });
+  });
+
+  describe("constructor arity checking", () => {
+    it("allows constructors with correct arity", () => {
+      expect(runProgramPrint('type Shape = Circle(Float) \n Circle(2.5)')).toBe("Circle(2.5)");
+    });
+
+    it("allows bare nullary constructors", () => {
+      expect(runProgramPrint('type Phase = Idle | Working \n Idle')).toBe("Idle");
+    });
+
+    it("throws on constructor with wrong arity (too few args)", () => {
+      expect(() =>
+        runProgram('type Shape = Circle(Float) \n Circle()')
+      ).toThrow(/Circle.*arity/i);
+    });
+
+    it("throws on constructor with wrong arity (too many args)", () => {
+      expect(() =>
+        runProgram('type Shape = Circle(Float) \n Circle(1.0, 2.0)')
+      ).toThrow(/Circle.*arity/i);
+    });
+
+    it("is permissive for bare expressions without declarations", () => {
+      // Should not throw even though Circle is not declared
+      // Note: prettyPrint omits () when args.length === 0, so Circle() prints as Circle
+      expect(runPrint("Circle()")).toBe("Circle");
+      expect(runPrint("Idle")).toBe("Idle");
     });
   });
 });

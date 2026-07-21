@@ -1,6 +1,8 @@
 import { Expr } from "./ast";
 import { Value } from "./values";
 import { Span, formatSpan } from "./span";
+import { Program } from "./parser";
+import { buildDeclEnv, createPreludeDeclEnv } from "./decls";
 
 class EarlyReturn {
   constructor(public value: Value) {}
@@ -8,14 +10,32 @@ class EarlyReturn {
 
 export function evaluate(expr: Expr, env: Map<string, Value> = new Map()): Value {
   try {
-    return evalExpr(expr, env);
+    return evalExpr(expr, env, undefined);
   } catch (e) {
     if (e instanceof EarlyReturn) return e.value;
     throw e;
   }
 }
 
-function evalExpr(expr: Expr, env: Map<string, Value>): Value {
+export function evaluateProgram(program: Program, env: Map<string, Value> = new Map()): Value {
+  try {
+    // Build the declaration environment from the program's declarations
+    const declEnv = buildDeclEnv(program.declarations, createPreludeDeclEnv());
+
+    // Extract constructor arities from the declaration environment
+    const constructorArities = new Map<string, number>();
+    for (const [ctorName, ctorInfo] of declEnv.ctors) {
+      constructorArities.set(ctorName, ctorInfo.payload === null ? 0 : 1);
+    }
+
+    return evalExpr(program.body, env, constructorArities);
+  } catch (e) {
+    if (e instanceof EarlyReturn) return e.value;
+    throw e;
+  }
+}
+
+function evalExpr(expr: Expr, env: Map<string, Value>, constructorArities?: Map<string, number>): Value {
   switch (expr.kind) {
     case "IntLit":
       return { kind: "Int", value: expr.value };
@@ -37,26 +57,26 @@ function evalExpr(expr: Expr, env: Map<string, Value>): Value {
     case "BinOp": {
       // && and || short-circuit: only evaluate the right side when needed
       if (expr.op === "&&" || expr.op === "||") {
-        const left = evalExpr(expr.left, env);
+        const left = evalExpr(expr.left, env, constructorArities);
         if (left.kind !== "Bool") throw new Error(`Cannot apply operator ${expr.op} to ${left.kind}`);
         if (expr.op === "&&" && !left.value) return { kind: "Bool", value: false };
         if (expr.op === "||" && left.value) return { kind: "Bool", value: true };
-        const right = evalExpr(expr.right, env);
+        const right = evalExpr(expr.right, env, constructorArities);
         if (right.kind !== "Bool") throw new Error(`Cannot apply operator ${expr.op} to ${right.kind}`);
         return right;
       }
-      const left = evalExpr(expr.left, env);
-      const right = evalExpr(expr.right, env);
+      const left = evalExpr(expr.left, env, constructorArities);
+      const right = evalExpr(expr.right, env, constructorArities);
       return evalBinOp(expr.op, left, right, expr.span);
     }
 
     case "UnaryOp": {
-      const operand = evalExpr(expr.expr, env);
+      const operand = evalExpr(expr.expr, env, constructorArities);
       return evalUnaryOp(expr.op, operand);
     }
 
     case "Let": {
-      const value = evalExpr(expr.value, env);
+      const value = evalExpr(expr.value, env, constructorArities);
       const newEnv = new Map(env);
       if (expr.rec && value.kind === "Closure") {
         const recEnv = new Map(value.env);
@@ -64,33 +84,33 @@ function evalExpr(expr: Expr, env: Map<string, Value>): Value {
         value.env = recEnv;
       }
       newEnv.set(expr.name, value);
-      return evalExpr(expr.body, newEnv);
+      return evalExpr(expr.body, newEnv, constructorArities);
     }
 
     case "Fn":
       return { kind: "Closure", param: expr.param, body: expr.body, env: new Map(env) };
 
     case "Call": {
-      const fn = evalExpr(expr.fn, env);
-      const arg = evalExpr(expr.arg, env);
+      const fn = evalExpr(expr.fn, env, constructorArities);
+      const arg = evalExpr(expr.arg, env, constructorArities);
       return applyFn(fn, arg);
     }
 
     case "Match": {
-      const subject = evalExpr(expr.subject, env);
+      const subject = evalExpr(expr.subject, env, constructorArities);
       for (const c of expr.cases) {
         const bindings = matchPattern(c.pattern, subject);
         if (bindings !== null) {
           const matchEnv = new Map(env);
           for (const [k, v] of bindings) matchEnv.set(k, v);
-          return evalExpr(c.body, matchEnv);
+          return evalExpr(c.body, matchEnv, constructorArities);
         }
       }
       throw new Error("No matching pattern");
     }
 
     case "Try": {
-      const val = evalExpr(expr.expr, env);
+      const val = evalExpr(expr.expr, env, constructorArities);
       if (val.kind === "Tag" && val.tag === "Ok" && val.args.length === 1) {
         return val.args[0];
       }
@@ -102,14 +122,14 @@ function evalExpr(expr: Expr, env: Map<string, Value>): Value {
 
     case "Catch": {
       try {
-        const val = evalExpr(expr.expr, env);
+        const val = evalExpr(expr.expr, env, constructorArities);
         if (val.kind === "Tag" && val.tag === "Ok" && val.args.length === 1) {
           return val.args[0];
         }
         if (val.kind === "Tag" && val.tag === "Err" && val.args.length >= 1) {
           const catchEnv = new Map(env);
           catchEnv.set(expr.errorName, val.args[0]);
-          return evalExpr(expr.fallback, catchEnv);
+          return evalExpr(expr.fallback, catchEnv, constructorArities);
         }
         return val;
       } catch (e) {
@@ -117,7 +137,7 @@ function evalExpr(expr: Expr, env: Map<string, Value>): Value {
           if (e.value.kind === "Tag" && e.value.tag === "Err" && e.value.args.length >= 1) {
             const catchEnv = new Map(env);
             catchEnv.set(expr.errorName, e.value.args[0]);
-            return evalExpr(expr.fallback, catchEnv);
+            return evalExpr(expr.fallback, catchEnv, constructorArities);
           }
           return e.value;
         }
@@ -132,12 +152,12 @@ function evalExpr(expr: Expr, env: Map<string, Value>): Value {
           ...expr.right,
           expr: expr.left,
         };
-        return evalExpr(catchExpr, env);
+        return evalExpr(catchExpr, env, constructorArities);
       }
       // Special handling: if right side is Try, apply inner fn first then try
       if (expr.right.kind === "Try") {
-        const left = evalExpr(expr.left, env);
-        const fn = evalExpr(expr.right.expr, env);
+        const left = evalExpr(expr.left, env, constructorArities);
+        const fn = evalExpr(expr.right.expr, env, constructorArities);
         const result = applyFn(fn, left);
         if (result.kind === "Tag" && result.tag === "Ok" && result.args.length === 1) {
           return result.args[0];
@@ -147,40 +167,51 @@ function evalExpr(expr: Expr, env: Map<string, Value>): Value {
         }
         throw new Error("? operator requires Ok(...) or Err(...)");
       }
-      const left = evalExpr(expr.left, env);
-      const right = evalExpr(expr.right, env);
+      const left = evalExpr(expr.left, env, constructorArities);
+      const right = evalExpr(expr.right, env, constructorArities);
       return applyFn(right, left);
     }
 
     case "List":
-      return { kind: "List", elements: expr.elements.map(e => evalExpr(e, env)) };
+      return { kind: "List", elements: expr.elements.map(e => evalExpr(e, env, constructorArities)) };
 
     case "Tuple":
-      return { kind: "Tuple", elements: expr.elements.map(e => evalExpr(e, env)) };
+      return { kind: "Tuple", elements: expr.elements.map(e => evalExpr(e, env, constructorArities)) };
 
     case "Record": {
       const fields = new Map<string, Value>();
       for (const f of expr.fields) {
-        fields.set(f.name, evalExpr(f.value, env));
+        fields.set(f.name, evalExpr(f.value, env, constructorArities));
       }
       return { kind: "Record", fields };
     }
 
     case "FieldAccess": {
-      const record = evalExpr(expr.expr, env);
+      const record = evalExpr(expr.expr, env, constructorArities);
       if (record.kind !== "Record") throw new Error("Field access on non-record");
       const val = record.fields.get(expr.field);
       if (val === undefined) throw new Error(`No field ${expr.field}`);
       return val;
     }
 
-    case "Tag":
-      return { kind: "Tag", tag: expr.tag, args: expr.args.map(a => evalExpr(a, env)) };
+    case "Tag": {
+      // Check constructor arity if we have the arity map
+      if (constructorArities && constructorArities.has(expr.tag)) {
+        const expectedArity = constructorArities.get(expr.tag)!;
+        const actualArity = expr.args.length;
+        if (actualArity !== expectedArity) {
+          throw new Error(
+            `${expr.tag}: arity mismatch (expected ${expectedArity}, got ${actualArity})`
+          );
+        }
+      }
+      return { kind: "Tag", tag: expr.tag, args: expr.args.map(a => evalExpr(a, env, constructorArities)) };
+    }
 
     case "If": {
-      const cond = evalExpr(expr.cond, env);
+      const cond = evalExpr(expr.cond, env, constructorArities);
       if (cond.kind !== "Bool") throw new Error("If condition must be Bool");
-      return cond.value ? evalExpr(expr.then, env) : evalExpr(expr.else_, env);
+      return cond.value ? evalExpr(expr.then, env, constructorArities) : evalExpr(expr.else_, env, constructorArities);
     }
 
     default:
