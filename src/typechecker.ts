@@ -797,6 +797,21 @@ export function createPreludeTypeEnv(): TypeEnv {
   }
   // require : Bool -> String -> Result(Unit)
   env.set("require", scheme(tfn(Bool, Str, tunion("Result", [Unit]))));
+  // at : Int -> List(a) -> Result(a)
+  {
+    const a = freshTypeVar();
+    env.set("at", scheme(tfn(Int, tlist(a), tunion("Result", [a]))));
+  }
+  // with_default : a -> Option(a) -> a
+  {
+    const a = freshTypeVar();
+    env.set("with_default", scheme(tfn(a, tunion("Option", [a]), a)));
+  }
+  // map_option : (a -> b) -> Option(a) -> Option(b)
+  {
+    const a = freshTypeVar(), b = freshTypeVar();
+    env.set("map_option", scheme(tfn(tfn(a, b), tunion("Option", [a]), tunion("Option", [b]))));
+  }
 
   return env;
 }

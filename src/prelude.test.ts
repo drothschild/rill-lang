@@ -197,4 +197,78 @@ describe("Prelude", () => {
       `)).toBe('Ok("valid")');
     });
   });
+
+  describe("at", () => {
+    it("returns Ok of the element at a valid index", () => {
+      expect(runPrint("at(0, [10, 20, 30])")).toBe("Ok(10)");
+    });
+
+    it("returns Ok of an element in the middle", () => {
+      expect(runPrint("at(1, [10, 20, 30])")).toBe("Ok(20)");
+    });
+
+    it("returns Ok of the last element", () => {
+      expect(runPrint("at(2, [10, 20, 30])")).toBe("Ok(30)");
+    });
+
+    it("returns Err for out-of-bounds positive index", () => {
+      expect(runPrint("at(5, [10, 20, 30])")).toBe('Err("index 5 out of bounds (list has 3 elements)")');
+    });
+
+    it("returns Err for negative index", () => {
+      expect(runPrint("at(-1, [10, 20, 30])")).toBe('Err("index -1 out of bounds (list has 3 elements)")');
+    });
+
+    it("returns Err for empty list", () => {
+      expect(runPrint("at(0, [])")).toBe('Err("index 0 out of bounds (list has 0 elements)")');
+    });
+
+    it("works with pipes", () => {
+      expect(runPrint("[10, 20, 30] |> at(1)")).toBe("Ok(20)");
+    });
+  });
+
+  describe("with_default", () => {
+    it("returns the value from Some", () => {
+      expect(runPrint("with_default(0, Some(5))")).toBe("5");
+    });
+
+    it("returns the default for None", () => {
+      expect(runPrint("with_default(0, None)")).toBe("0");
+    });
+
+    it("works with string defaults", () => {
+      expect(runPrint('with_default("fallback", Some("value"))')).toBe('"value"');
+    });
+
+    it("works with string default and None", () => {
+      expect(runPrint('with_default("fallback", None)')).toBe('"fallback"');
+    });
+
+    it("works with pipes", () => {
+      expect(runPrint("Some(42) |> with_default(0)")).toBe("42");
+    });
+  });
+
+  describe("map_option", () => {
+    it("maps over Some", () => {
+      expect(runPrint("map_option(fn(x) -> x * 2, Some(5))")).toBe("Some(10)");
+    });
+
+    it("passes None through", () => {
+      expect(runPrint("map_option(fn(x) -> x * 2, None)")).toBe("None");
+    });
+
+    it("works with string transformation", () => {
+      expect(runPrint('map_option(fn(x) -> x ++ "!", Some("hi"))')).toBe('Some("hi!")');
+    });
+
+    it("works with pipes", () => {
+      expect(runPrint("Some(5) |> map_option(fn(x) -> x * 2)")).toBe("Some(10)");
+    });
+
+    it("chains multiple map_option calls", () => {
+      expect(runPrint("Some(5) |> map_option(fn(x) -> x * 2) |> map_option(fn(x) -> x + 1)")).toBe("Some(11)");
+    });
+  });
 });

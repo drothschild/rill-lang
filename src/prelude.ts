@@ -175,5 +175,44 @@ export function createPrelude(): Map<string, Value> {
     return { kind: "Tag", tag: "Err", args: [msg] };
   }));
 
+  env.set("at", builtin("at", 2, ([idx, list]) => {
+    if (idx.kind !== "Int") throw new Error("at expects an Int index");
+    assertList(list);
+    const index = idx.value;
+    if (index < 0 || index >= list.elements.length) {
+      return {
+        kind: "Tag",
+        tag: "Err",
+        args: [{ kind: "String", value: `index ${index} out of bounds (list has ${list.elements.length} elements)` }],
+      };
+    }
+    return { kind: "Tag", tag: "Ok", args: [list.elements[index]] };
+  }));
+
+  env.set("with_default", builtin("with_default", 2, ([def, opt]) => {
+    if (opt.kind === "Tag") {
+      if (opt.tag === "Some" && opt.args.length === 1) {
+        return opt.args[0];
+      }
+      if (opt.tag === "None" && opt.args.length === 0) {
+        return def;
+      }
+    }
+    throw new Error("with_default expects an Option");
+  }));
+
+  env.set("map_option", builtin("map_option", 2, ([f, opt]) => {
+    if (opt.kind === "Tag") {
+      if (opt.tag === "Some" && opt.args.length === 1) {
+        const result = applyFn(f, opt.args[0]);
+        return { kind: "Tag", tag: "Some", args: [result] };
+      }
+      if (opt.tag === "None" && opt.args.length === 0) {
+        return { kind: "Tag", tag: "None", args: [] };
+      }
+    }
+    throw new Error("map_option expects an Option");
+  }));
+
   return env;
 }

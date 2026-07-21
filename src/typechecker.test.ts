@@ -450,6 +450,33 @@ describe("Type Inference", () => {
       const env = createPreludeTypeEnv();
       expect(() => infer(parse(lex("length([1, 2, 3])")), env)).not.toThrow();
     });
+
+    it("at renders as Int -> List(a) -> Result(a)", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      const scheme = env.get("at");
+      expect(scheme).toBeDefined();
+      const rendered = schemeToString(scheme!);
+      expect(rendered).toBe("Int -> List(a) -> Result(a)");
+    });
+
+    it("with_default renders as a -> Option(a) -> a", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      const scheme = env.get("with_default");
+      expect(scheme).toBeDefined();
+      const rendered = schemeToString(scheme!);
+      expect(rendered).toBe("a -> Option(a) -> a");
+    });
+
+    it("map_option renders as (a -> b) -> Option(a) -> Option(b)", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      const scheme = env.get("map_option");
+      expect(scheme).toBeDefined();
+      const rendered = schemeToString(scheme!);
+      expect(rendered).toBe("(a -> b) -> Option(a) -> Option(b)");
+    });
   });
 
   describe("rules prelude builtins", () => {
@@ -513,6 +540,36 @@ describe("Type Inference", () => {
         let b = require(true, "Role is required")? in
         Ok("valid")
       `)).toBe("Result(String)");
+    });
+
+    it("at infers Result of the list element type", () => {
+      expect(typeWithPrelude("at(0, [10, 20, 30])")).toBe("Result(Int)");
+    });
+
+    it("at rejects non-Int index", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex('at("x", [1, 2, 3])')), env)).toThrow(/unify/i);
+    });
+
+    it("with_default infers the Option element type", () => {
+      expect(typeWithPrelude("with_default(0, Some(5))")).toBe("Int");
+    });
+
+    it("with_default rejects mismatched default and Option types", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex('with_default(0, Some("x"))')), env)).toThrow(/unify/i);
+    });
+
+    it("map_option infers the mapped Option type", () => {
+      expect(typeWithPrelude("map_option(fn(x) -> x * 2, Some(5))")).toBe("Option(Int)");
+    });
+
+    it("map_option rejects function with wrong input type", () => {
+      resetTypeVarCounter();
+      const env = createPreludeTypeEnv();
+      expect(() => infer(parse(lex('map_option(fn(x) -> x ++ "!", Some(5))')), env)).toThrow(/unify/i);
     });
   });
   describe("operator operand constraints", () => {
