@@ -1,8 +1,9 @@
-import { Expr } from "./ast";
+import { Expr, Program } from "./ast";
 import { Type, freshTypeVar, prettyType } from "./types";
 import { Substitution, unify, applySubst } from "./unify";
 import { RillError } from "./errors";
 import { Span } from "./span";
+import { DeclEnv, createPreludeDeclEnv, instantiateCtor, suggestName } from "./decls";
 
 // A type scheme: forall quantifiedVars . type
 interface Scheme {
@@ -107,10 +108,11 @@ function typeError(msg: string, span: Span): Error {
   return new TypeError(msg);
 }
 
-export function infer(expr: Expr, env?: TypeEnv, source?: string): Type {
+export function infer(expr: Expr, env?: TypeEnv, source?: string, declEnv?: DeclEnv): Type {
   _source = source;
   const defaultEnv: TypeEnv = env ?? new Map();
-  const [type, subst] = inferExpr(expr, defaultEnv, new Map());
+  const defaultDeclEnv: DeclEnv = declEnv ?? createPreludeDeclEnv();
+  const [type, subst] = inferExpr(expr, defaultEnv, new Map(), defaultDeclEnv);
   return applySubst(subst, type);
 }
 
@@ -125,7 +127,7 @@ function withSpan<T>(fn: () => T, span: Span): T {
   }
 }
 
-function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substitution] {
+function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution, declEnv: DeclEnv): [Type, Substitution] {
   switch (expr.kind) {
     case "IntLit": return [{ kind: "TCon", name: "Int" }, subst];
     case "FloatLit": return [{ kind: "TCon", name: "Float" }, subst];
@@ -140,13 +142,13 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
     }
 
     case "BinOp": {
-      const [leftT, s1] = inferExpr(expr.left, env, subst);
-      const [rightT, s2] = inferExpr(expr.right, env, s1);
+      const [leftT, s1] = inferExpr(expr.left, env, subst, declEnv);
+      const [rightT, s2] = inferExpr(expr.right, env, s1, declEnv);
       return withSpan(() => inferBinOp(expr.op, leftT, rightT, s2), expr.span);
     }
 
     case "UnaryOp": {
-      const [operandT, s1] = inferExpr(expr.expr, env, subst);
+      const [operandT, s1] = inferExpr(expr.expr, env, subst, declEnv);
       if (expr.op === "!") {
         const s2 = unify(operandT, { kind: "TCon", name: "Bool" }, s1);
         return [{ kind: "TCon", name: "Bool" }, s2];
@@ -166,34 +168,34 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
     }
 
     case "Let": {
-      const [valT, s1] = inferExpr(expr.value, env, subst);
+      const [valT, s1] = inferExpr(expr.value, env, subst, declEnv);
       const scheme = expr.rec ? mono(valT) : generalize(env, valT, s1);
       const newEnv = new Map(env);
       newEnv.set(expr.name, scheme);
-      return inferExpr(expr.body, newEnv, s1);
+      return inferExpr(expr.body, newEnv, s1, declEnv);
     }
 
     case "Fn": {
       const paramT = freshTypeVar();
       const newEnv = new Map(env);
       newEnv.set(expr.param, mono(paramT));
-      const [bodyT, s1] = inferExpr(expr.body, newEnv, subst);
+      const [bodyT, s1] = inferExpr(expr.body, newEnv, subst, declEnv);
       return [{ kind: "TFn", param: applySubst(s1, paramT), ret: bodyT }, s1];
     }
 
     case "Call": {
-      const [fnT, s1] = inferExpr(expr.fn, env, subst);
-      const [argT, s2] = inferExpr(expr.arg, env, s1);
+      const [fnT, s1] = inferExpr(expr.fn, env, subst, declEnv);
+      const [argT, s2] = inferExpr(expr.arg, env, s1, declEnv);
       const retT = freshTypeVar();
       const s3 = withSpan(() => unify(applySubst(s2, fnT), { kind: "TFn", param: argT, ret: retT }, s2), expr.span);
       return [applySubst(s3, retT), s3];
     }
 
     case "If": {
-      const [condT, s1] = inferExpr(expr.cond, env, subst);
+      const [condT, s1] = inferExpr(expr.cond, env, subst, declEnv);
       const s2 = unify(condT, { kind: "TCon", name: "Bool" }, s1);
-      const [thenT, s3] = inferExpr(expr.then, env, s2);
-      const [elseT, s4] = inferExpr(expr.else_, env, s3);
+      const [thenT, s3] = inferExpr(expr.then, env, s2, declEnv);
+      const [elseT, s4] = inferExpr(expr.else_, env, s3, declEnv);
       const s5 = unify(thenT, elseT, s4);
       return [applySubst(s5, thenT), s5];
     }
@@ -203,10 +205,10 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
         return [{ kind: "TList", element: freshTypeVar() }, subst];
       }
       let s = subst;
-      const [firstT, s1] = inferExpr(expr.elements[0], env, s);
+      const [firstT, s1] = inferExpr(expr.elements[0], env, s, declEnv);
       s = s1;
       for (let i = 1; i < expr.elements.length; i++) {
-        const [elT, si] = inferExpr(expr.elements[i], env, s);
+        const [elT, si] = inferExpr(expr.elements[i], env, s, declEnv);
         s = unify(firstT, elT, si);
       }
       return [{ kind: "TList", element: applySubst(s, firstT) }, s];
@@ -216,7 +218,7 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
       let s = subst;
       const types: Type[] = [];
       for (const el of expr.elements) {
-        const [t, si] = inferExpr(el, env, s);
+        const [t, si] = inferExpr(el, env, s, declEnv);
         types.push(t);
         s = si;
       }
@@ -227,7 +229,7 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
       let s = subst;
       const fields = new Map<string, Type>();
       for (const f of expr.fields) {
-        const [t, si] = inferExpr(f.value, env, s);
+        const [t, si] = inferExpr(f.value, env, s, declEnv);
         fields.set(f.name, t);
         s = si;
       }
@@ -235,7 +237,7 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
     }
 
     case "FieldAccess": {
-      const [recT, s1] = inferExpr(expr.expr, env, subst);
+      const [recT, s1] = inferExpr(expr.expr, env, subst, declEnv);
       const resolved = applySubst(s1, recT);
       if (resolved.kind === "TRecord") {
         const fieldT = resolved.fields.get(expr.field);
@@ -272,53 +274,74 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
       let s = subst;
       const argTypes: Type[] = [];
       for (const a of expr.args) {
-        const [t, si] = inferExpr(a, env, s);
+        const [t, si] = inferExpr(a, env, s, declEnv);
         argTypes.push(t);
         s = si;
       }
-      if (expr.tag === "Ok" && argTypes.length === 1) {
-        return [{ kind: "TResult", ok: argTypes[0] }, s];
+
+      // Look up constructor in declEnv
+      const ctorInfo = declEnv.ctors.get(expr.tag);
+      if (!ctorInfo) {
+        // Unknown constructor - error with did-you-mean
+        const suggestion = suggestName(expr.tag, declEnv.ctors.keys());
+        const suggestionText = suggestion ? ` (did you mean ${suggestion}?)` : "";
+        throw typeError(`Unknown constructor: ${expr.tag}${suggestionText}`, expr.span);
       }
-      if (expr.tag === "Err" && argTypes.length === 1) {
-        return [{ kind: "TResult", ok: freshTypeVar() }, s];
+
+      // Instantiate the constructor
+      const { unionType, payload } = instantiateCtor(ctorInfo, declEnv);
+
+      // Check arity
+      const expectedArity = payload === null ? 0 : 1;
+      if (argTypes.length !== expectedArity) {
+        throw typeError(
+          `Constructor ${expr.tag} expects ${expectedArity} arguments, got ${argTypes.length}`,
+          expr.span
+        );
       }
-      return [{ kind: "TTag", tag: expr.tag, args: argTypes }, s];
+
+      // Unify argument type with payload if needed
+      if (payload !== null && argTypes.length === 1) {
+        s = unify(argTypes[0], payload, s);
+      }
+
+      return [unionType, s];
     }
 
     case "Pipe": {
       // a |> f desugars to f(a) for type checking
-      const [leftT, s1] = inferExpr(expr.left, env, subst);
+      const [leftT, s1] = inferExpr(expr.left, env, subst, declEnv);
       if (expr.right.kind === "Catch") {
         // catch unwraps Result: if leftT is Result(T), return T unified with fallback
         const okT = freshTypeVar();
         const s2 = unify(applySubst(s1, leftT), { kind: "TResult", ok: okT }, s1);
         const catchEnv = new Map(env);
         catchEnv.set(expr.right.errorName, mono({ kind: "TCon", name: "String" }));
-        const [fallbackT, s3] = inferExpr(expr.right.fallback, catchEnv, s2);
+        const [fallbackT, s3] = inferExpr(expr.right.fallback, catchEnv, s2, declEnv);
         const s4 = unify(applySubst(s3, okT), fallbackT, s3);
         return [applySubst(s4, okT), s4];
       }
       // Special handling: if right side is Try, apply inner fn first then try
       if (expr.right.kind === "Try") {
-        const [fnT, s2] = inferExpr(expr.right.expr, env, s1);
+        const [fnT, s2] = inferExpr(expr.right.expr, env, s1, declEnv);
         const callRetT = freshTypeVar();
         const s3 = unify(applySubst(s2, fnT), { kind: "TFn", param: applySubst(s2, leftT), ret: callRetT }, s2);
         const okT = freshTypeVar();
         const s4 = unify(applySubst(s3, callRetT), { kind: "TResult", ok: okT }, s3);
         return [applySubst(s4, okT), s4];
       }
-      const [rightT, s2] = inferExpr(expr.right, env, s1);
+      const [rightT, s2] = inferExpr(expr.right, env, s1, declEnv);
       const retT = freshTypeVar();
       const s3 = unify(applySubst(s2, rightT), { kind: "TFn", param: applySubst(s2, leftT), ret: retT }, s2);
       return [applySubst(s3, retT), s3];
     }
 
     case "Match": {
-      const [subjT, s1] = inferExpr(expr.subject, env, subst);
+      const [subjT, s1] = inferExpr(expr.subject, env, subst, declEnv);
       let s = s1;
       const retT = freshTypeVar();
       for (const c of expr.cases) {
-        const [patT, patBindings, s2] = inferPattern(c.pattern, s);
+        const [patT, patBindings, s2] = inferPattern(c.pattern, s, declEnv);
         // Skip subject-pattern unification for tag patterns (no sum types in v1)
         if (patT.kind === "TTag") {
           s = s2;
@@ -331,14 +354,14 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
         }
         const matchEnv = new Map(env);
         for (const [k, t] of patBindings) matchEnv.set(k, mono(t));
-        const [bodyT, s3] = inferExpr(c.body, matchEnv, s);
+        const [bodyT, s3] = inferExpr(c.body, matchEnv, s, declEnv);
         s = unify(retT, bodyT, s3);
       }
       return [applySubst(s, retT), s];
     }
 
     case "Try": {
-      const [exprT, s1] = inferExpr(expr.expr, env, subst);
+      const [exprT, s1] = inferExpr(expr.expr, env, subst, declEnv);
       const okT = freshTypeVar();
       const resolvedExprT = applySubst(s1, exprT);
       try {
@@ -350,10 +373,10 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution): [Type, Substi
     }
 
     case "Catch": {
-      const [exprT, s1] = inferExpr(expr.expr, env, subst);
+      const [exprT, s1] = inferExpr(expr.expr, env, subst, declEnv);
       const newEnv = new Map(env);
       newEnv.set(expr.errorName, mono({ kind: "TCon", name: "String" }));
-      const [fallbackT, s2] = inferExpr(expr.fallback, newEnv, s1);
+      const [fallbackT, s2] = inferExpr(expr.fallback, newEnv, s1, declEnv);
       // Result: either the ok type or the fallback type
       return [fallbackT, s2];
     }
@@ -450,7 +473,7 @@ function inferBinOp(op: string, leftT: Type, rightT: Type, subst: Substitution):
   throw new TypeError(`Unknown operator: ${op}`);
 }
 
-function inferPattern(pattern: import("./ast").Pattern, subst: Substitution): [Type, Map<string, Type>, Substitution] {
+function inferPattern(pattern: import("./ast").Pattern, subst: Substitution, declEnv: DeclEnv): [Type, Map<string, Type>, Substitution] {
   switch (pattern.kind) {
     case "IntPat": return [{ kind: "TCon", name: "Int" }, new Map(), subst];
     case "FloatPat": return [{ kind: "TCon", name: "Float" }, new Map(), subst];
@@ -466,7 +489,7 @@ function inferPattern(pattern: import("./ast").Pattern, subst: Substitution): [T
       const argTypes: Type[] = [];
       const bindings = new Map<string, Type>();
       for (const arg of pattern.args) {
-        const [t, b, si] = inferPattern(arg, s);
+        const [t, b, si] = inferPattern(arg, s, declEnv);
         argTypes.push(t);
         for (const [k, v] of b) bindings.set(k, v);
         s = si;
@@ -484,7 +507,7 @@ function inferPattern(pattern: import("./ast").Pattern, subst: Substitution): [T
       const types: Type[] = [];
       const bindings = new Map<string, Type>();
       for (const el of pattern.elements) {
-        const [t, b, si] = inferPattern(el, s);
+        const [t, b, si] = inferPattern(el, s, declEnv);
         types.push(t);
         for (const [k, v] of b) bindings.set(k, v);
         s = si;
@@ -496,7 +519,7 @@ function inferPattern(pattern: import("./ast").Pattern, subst: Substitution): [T
       const fields = new Map<string, Type>();
       const bindings = new Map<string, Type>();
       for (const f of pattern.fields) {
-        const [t, b, si] = inferPattern(f.pattern, s);
+        const [t, b, si] = inferPattern(f.pattern, s, declEnv);
         fields.set(f.name, t);
         for (const [k, v] of b) bindings.set(k, v);
         s = si;

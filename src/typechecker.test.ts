@@ -1,12 +1,21 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { infer, createPreludeTypeEnv, bindType } from "./typechecker";
-import { parse } from "./parser";
+import { parse, parseProgram } from "./parser";
 import { lex } from "./lexer";
 import { prettyType, resetTypeVarCounter, Type, T } from "./types";
+import { buildDeclEnv, createPreludeDeclEnv } from "./decls";
 
 function typeOf(source: string): string {
   resetTypeVarCounter();
   const type = infer(parse(lex(source)));
+  return prettyType(type);
+}
+
+function typeOfProgram(source: string): string {
+  resetTypeVarCounter();
+  const program = parseProgram(lex(source));
+  const declEnv = buildDeclEnv(program.declarations, createPreludeDeclEnv());
+  const type = infer(program.body, undefined, source, declEnv);
   return prettyType(type);
 }
 
@@ -83,7 +92,7 @@ describe("Type Inference", () => {
     });
 
     it("infers tagged value type", () => {
-      expect(typeOf("Ok(42)")).toBe("Result(Int, String)");
+      expect(typeOf("Ok(42)")).toBe("Result(Int)");
     });
   });
 
@@ -413,7 +422,7 @@ describe("Type Inference", () => {
     });
 
     it("lookup infers Result of the tuple value type", () => {
-      expect(typeWithPrelude('lookup("a", [("a", 1), ("b", 2)])')).toBe("Result(Int, String)");
+      expect(typeWithPrelude('lookup("a", [("a", 1), ("b", 2)])')).toBe("Result(Int)");
     });
 
     it("lookup rejects a key type mismatching the tuple key type", () => {
@@ -422,8 +431,8 @@ describe("Type Inference", () => {
       expect(() => infer(parse(lex('lookup(1, [("a", 1)])')), env)).toThrow(/unify/i);
     });
 
-    it("require infers Result(Unit, String)", () => {
-      expect(typeWithPrelude('require(true, "msg")')).toBe("Result(Unit, String)");
+    it("require infers Result(Unit)", () => {
+      expect(typeWithPrelude('require(true, "msg")')).toBe("Result(Unit)");
     });
 
     it("require rejects a non-String message", () => {
@@ -437,7 +446,7 @@ describe("Type Inference", () => {
         let a = require(str_len("x") > 0, "Company name is required")? in
         let b = require(true, "Role is required")? in
         Ok("valid")
-      `)).toBe("Result(String, String)");
+      `)).toBe("Result(String)");
     });
   });
   describe("operator operand constraints", () => {
@@ -545,5 +554,55 @@ describe("record and tag unification regressions", () => {
 
   it("reports an infinite type instead of overflowing when a variable is unified with a tag wrapping it", () => {
     expect(() => typeOf("fn(x) -> match true { true -> x, _ -> Some(x) }")).toThrow(/infinite type/);
+  });
+});
+
+describe("Task 8: Constructor inference for declared unions", () => {
+  beforeEach(() => resetTypeVarCounter());
+
+  it("infers Shape constructor with payload", () => {
+    const source = `type Shape = Circle(Float) | Square(Float)
+      Circle(2.0)`;
+    expect(typeOfProgram(source)).toBe("Shape");
+  });
+
+  it("rejects constructor with wrong payload type", () => {
+    const source = `type Shape = Circle(Float) | Square(Float)
+      Circle(2)`;
+    expect(() => typeOfProgram(source)).toThrow();
+  });
+
+  it("rejects constructor with wrong arity", () => {
+    const source = `type Shape = Circle(Float)
+      Circle()`;
+    expect(() => typeOfProgram(source)).toThrow(/expects 1 arguments, got 0/);
+  });
+
+  it("rejects unknown constructor with did-you-mean", () => {
+    const source = `type Circle = Circle(Float)
+      Circl(2.0)`;
+    try {
+      typeOfProgram(source);
+      expect.unreachable();
+    } catch (e: any) {
+      expect(e.message).toContain("Unknown constructor");
+      expect(e.message).toContain("Circl");
+    }
+  });
+
+  it("Ok(1) infers Result(Int) from prelude", () => {
+    expect(typeOf("Ok(1)")).toBe("Result(Int)");
+  });
+
+  it("Err('x') unifies with Ok(1)", () => {
+    expect(typeOf('match Ok(1) { Ok(x) -> x, Err(e) -> 0 }')).toBe("Int");
+  });
+
+  it("Some(1.0) infers Option(Float) from prelude", () => {
+    expect(typeOf("Some(1.0)")).toBe("Option(Float)");
+  });
+
+  it("None unifies with Some(1.0)", () => {
+    expect(typeOf("match Some(1) { Some(x) -> x, None -> 0 }")).toBe("Int");
   });
 });
