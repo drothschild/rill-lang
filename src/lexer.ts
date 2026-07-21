@@ -14,6 +14,9 @@ const KEYWORDS: Record<string, TokenKind> = {
   rule: TokenKind.Rule,
   true: TokenKind.True,
   false: TokenKind.False,
+  type: TokenKind.Type,
+  alias: TokenKind.Alias,
+  import: TokenKind.Import,
 };
 
 export function lex(source: string): Token[] {

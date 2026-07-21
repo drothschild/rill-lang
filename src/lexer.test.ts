@@ -47,6 +47,12 @@ describe("Lexer", () => {
       ]);
     });
 
+    it("lexes type, alias, import keywords", () => {
+      expect(kinds("type alias import")).toEqual([
+        TokenKind.Type, TokenKind.Alias, TokenKind.Import, TokenKind.EOF,
+      ]);
+    });
+
     it("lexes uppercase identifiers as UpperIdent", () => {
       expect(kinds("Ok Err Circle")).toEqual([
         TokenKind.UpperIdent, TokenKind.UpperIdent, TokenKind.UpperIdent, TokenKind.EOF,

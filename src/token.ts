@@ -19,6 +19,9 @@ export enum TokenKind {
   Then = "Then",
   Else = "Else",
   Rule = "Rule",
+  Type = "Type",
+  Alias = "Alias",
+  Import = "Import",
 
   // Identifiers
   Ident = "Ident",
