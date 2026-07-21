@@ -122,67 +122,58 @@ export function buildGraphDeclEnv(graph: ModuleGraph): DeclEnv {
     const moduleDecls = loadedModule.program.declarations;
 
     // Build a module-specific env to collect its names
-    try {
-      const moduleEnv = buildDeclEnv(moduleDecls);
+    const moduleEnv = buildDeclEnv(moduleDecls);
 
-      // Try to merge with the existing environment
-      // Check for collisions before actually merging
-      for (const name of moduleEnv.unions.keys()) {
-        if (mergedEnv.unions.has(name) || mergedEnv.aliases.has(name)) {
-          const existingModule = declSources.get(name)!;
-          throw new RillError(
-            `Duplicate type/alias name: ${name} (declared in both "${existingModule}" and "${modulePath}")`,
-            undefined
-          );
-        }
+    // Try to merge with the existing environment
+    // Check for collisions before actually merging
+    for (const name of moduleEnv.unions.keys()) {
+      if (mergedEnv.unions.has(name) || mergedEnv.aliases.has(name)) {
+        const existingModule = declSources.get(name)!;
+        throw new RillError(
+          `Duplicate type/alias name: ${name} (declared in both "${existingModule}" and "${modulePath}")`,
+          undefined
+        );
       }
+    }
 
-      for (const name of moduleEnv.aliases.keys()) {
-        if (mergedEnv.unions.has(name) || mergedEnv.aliases.has(name)) {
-          const existingModule = declSources.get(name)!;
-          throw new RillError(
-            `Duplicate type/alias name: ${name} (declared in both "${existingModule}" and "${modulePath}")`,
-            undefined
-          );
-        }
+    for (const name of moduleEnv.aliases.keys()) {
+      if (mergedEnv.unions.has(name) || mergedEnv.aliases.has(name)) {
+        const existingModule = declSources.get(name)!;
+        throw new RillError(
+          `Duplicate type/alias name: ${name} (declared in both "${existingModule}" and "${modulePath}")`,
+          undefined
+        );
       }
+    }
 
-      for (const name of moduleEnv.ctors.keys()) {
-        if (mergedEnv.ctors.has(name)) {
-          const existingModule = declSources.get(name)!;
-          const existingUnion = mergedEnv.ctors.get(name)!.union;
-          const newUnion = moduleEnv.ctors.get(name)!.union;
-          throw new RillError(
-            `Constructor ${name} defined in both ${existingUnion} (from "${existingModule}") and ${newUnion} (from "${modulePath}")`,
-            undefined
-          );
-        }
+    for (const name of moduleEnv.ctors.keys()) {
+      if (mergedEnv.ctors.has(name)) {
+        const existingModule = declSources.get(name)!;
+        const existingUnion = mergedEnv.ctors.get(name)!.union;
+        const newUnion = moduleEnv.ctors.get(name)!.union;
+        throw new RillError(
+          `Constructor ${name} defined in both ${existingUnion} (from "${existingModule}") and ${newUnion} (from "${modulePath}")`,
+          undefined
+        );
       }
+    }
 
-      // No collisions - perform the merge
-      mergedEnv = {
-        unions: new Map([...mergedEnv.unions, ...moduleEnv.unions]),
-        aliases: new Map([...mergedEnv.aliases, ...moduleEnv.aliases]),
-        ctors: new Map([...mergedEnv.ctors, ...moduleEnv.ctors]),
-      };
+    // No collisions - perform the merge
+    mergedEnv = {
+      unions: new Map([...mergedEnv.unions, ...moduleEnv.unions]),
+      aliases: new Map([...mergedEnv.aliases, ...moduleEnv.aliases]),
+      ctors: new Map([...mergedEnv.ctors, ...moduleEnv.ctors]),
+    };
 
-      // Track the source of each declaration
-      for (const name of moduleEnv.unions.keys()) {
-        declSources.set(name, modulePath);
-      }
-      for (const name of moduleEnv.aliases.keys()) {
-        declSources.set(name, modulePath);
-      }
-      for (const name of moduleEnv.ctors.keys()) {
-        declSources.set(name, modulePath);
-      }
-    } catch (error) {
-      // Re-throw RillError or other errors as-is
-      if (error instanceof RillError) {
-        throw error;
-      }
-      // If it's a plain Error from buildDeclEnv, re-throw as-is
-      throw error;
+    // Track the source of each declaration
+    for (const name of moduleEnv.unions.keys()) {
+      declSources.set(name, modulePath);
+    }
+    for (const name of moduleEnv.aliases.keys()) {
+      declSources.set(name, modulePath);
+    }
+    for (const name of moduleEnv.ctors.keys()) {
+      declSources.set(name, modulePath);
     }
   }
 
