@@ -232,5 +232,93 @@ describe("rule headers", () => {
       expect(result.errors[0]).toMatch(/Error at.*line.*col|line.*col/i);
       expect(result.errors[0]).toContain("UnknownType");
     });
+
+    describe("Task 6: Exhaustiveness checking at load gate", () => {
+      it("AC1.5: non-exhaustive match fails the load gate", () => {
+        const result = checkRuleSource(`
+          type Event = LogSet({ reps: Int }) | PauseSession | RestElapsed({ reps: Int })
+          rule f(e: Event) -> Int
+          match e {
+            LogSet(p) -> p.reps
+          }
+        `);
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0]).toMatch(/missing|exhaustiv/i);
+      });
+
+      it("AC1.5: exhaustive match passes the load gate", () => {
+        const result = checkRuleSource(`
+          type Event = LogSet({ reps: Int }) | PauseSession
+          rule f(e: Event) -> Int
+          match e {
+            LogSet(p) -> p.reps,
+            PauseSession -> 0
+          }
+        `);
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+      });
+
+      it("AC1.6: payload access from wrong constructor arm fails", () => {
+        const result = checkRuleSource(`
+          type Event = LogSet({ reps: Int }) | PauseSession
+          rule f(e: Event) -> Int
+          match e {
+            LogSet(p) -> p.reps,
+            PauseSession -> p.reps
+          }
+        `);
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+      });
+
+      it("AC1.8: guard-only coverage fails exhaustiveness", () => {
+        const result = checkRuleSource(`
+          type Event = Start | Pause | Stop
+          rule f(e: Event) -> Int
+          match e {
+            Start if false -> 1,
+            Pause -> 2,
+            Stop -> 3
+          }
+        `);
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0]).toMatch(/missing|exhaustiv/i);
+      });
+
+      it("AC1.8: only guarded Pause is not exhaustive", () => {
+        const result = checkRuleSource(`
+          type Event = Start | Pause
+          rule f(e: Event) -> Int
+          match e {
+            Start -> 1,
+            Pause if true -> 2
+          }
+        `);
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+      });
+
+      it("AC4.1: Option match missing None fails", () => {
+        const result = checkRuleSource(`
+          rule f(o: Option(Int)) -> Int
+          match o { Some(x) -> x }
+        `);
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0]).toMatch(/missing|exhaustiv/i);
+      });
+
+      it("parse error in guard surfaces through checkRuleSource", () => {
+        const result = checkRuleSource(`
+          rule f(x: Int) -> Int
+          match x { 1 if f(x)? -> 2, _ -> 0 }
+        `);
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+      });
+    });
   });
 });
