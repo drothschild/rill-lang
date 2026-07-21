@@ -59,6 +59,10 @@ class Parser {
     return this.tokens[this.pos];
   }
 
+  peekNext(): Token | undefined {
+    return this.pos + 1 < this.tokens.length ? this.tokens[this.pos + 1] : undefined;
+  }
+
   advance(): Token {
     const token = this.tokens[this.pos];
     this.pos++;
@@ -214,9 +218,38 @@ class Parser {
         this.expect(TokenKind.RParen);
         return first;
       }
-      // Record literal
+      // Record literal or Record update
       case TokenKind.LBrace: {
         const lbrace = this.advance();
+
+        // Check for record update: { base | fields }
+        if (this.at(TokenKind.Ident) && this.peekNext()?.kind === TokenKind.Bar) {
+          const baseToken = this.advance();
+          const base = baseToken.lexeme;
+          const baseSpan = baseToken.span;
+          this.expect(TokenKind.Bar);
+
+          // Parse update fields
+          const fields: { name: string; value: Expr }[] = [];
+          if (this.at(TokenKind.RBrace)) {
+            throw new Error(`Empty record update at line ${baseToken.span.start.line}, col ${baseToken.span.start.col}`);
+          }
+          fields.push(this.parseRecordField());
+          while (this.eat(TokenKind.Comma)) {
+            if (this.at(TokenKind.RBrace)) break;
+            fields.push(this.parseRecordField());
+          }
+          const rbrace = this.expect(TokenKind.RBrace);
+          return {
+            kind: "RecordUpdate",
+            base,
+            baseSpan,
+            fields,
+            span: { start: lbrace.span.start, end: rbrace.span.end },
+          };
+        }
+
+        // Regular record literal
         const fields: { name: string; value: Expr }[] = [];
         if (!this.at(TokenKind.RBrace)) {
           fields.push(this.parseRecordField());

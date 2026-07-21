@@ -49,6 +49,7 @@ export type Expr =
   | List
   | Tuple
   | Record
+  | RecordUpdate
   | FieldAccess
   | Tag;
 
@@ -153,6 +154,14 @@ export interface Tuple {
 
 export interface Record {
   kind: "Record";
+  fields: { name: string; value: Expr }[];
+  span: Span;
+}
+
+export interface RecordUpdate {
+  kind: "RecordUpdate";
+  base: string;
+  baseSpan: Span;
   fields: { name: string; value: Expr }[];
   span: Span;
 }

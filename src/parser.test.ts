@@ -502,6 +502,48 @@ describe("Parser", () => {
       });
     });
 
+    it("parses record update with single field", () => {
+      const ast = parseExpr("{ state | phase: Resting }");
+      expect(ast).toMatchObject({
+        kind: "RecordUpdate",
+        base: "state",
+        fields: [
+          { name: "phase", value: { kind: "Tag", tag: "Resting", args: [] } },
+        ],
+      });
+    });
+
+    it("parses record update with multiple fields", () => {
+      const ast = parseExpr("{ s | a: 1, b: \"x\" }");
+      expect(ast).toMatchObject({
+        kind: "RecordUpdate",
+        base: "s",
+        fields: [
+          { name: "a", value: { kind: "IntLit", value: 1 } },
+          { name: "b", value: { kind: "StringLit", value: "x" } },
+        ],
+      });
+    });
+
+    it("parses record update with field value using identifier", () => {
+      const ast = parseExpr("{ s | n: m }");
+      expect(ast).toMatchObject({
+        kind: "RecordUpdate",
+        base: "s",
+        fields: [
+          { name: "n", value: { kind: "Ident", name: "m" } },
+        ],
+      });
+    });
+
+    it("rejects record update with non-identifier base", () => {
+      expect(() => parseExpr("{ f() | a: 1 }")).toThrow();
+    });
+
+    it("rejects record update with no fields", () => {
+      expect(() => parseExpr("{ x | }")).toThrow();
+    });
+
     it("parses field access", () => {
       const ast = parseExpr("user.name");
       expect(ast).toMatchObject({
