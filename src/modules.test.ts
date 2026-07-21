@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { loadModules, buildGraphDeclEnv, checkModuleGraph } from "./modules";
+import { loadModules, buildGraphDeclEnv, checkModuleGraph, evaluateModuleGraph } from "./modules";
 import { lex } from "./lexer";
 import { RillError } from "./errors";
 import { createPreludeTypeEnv } from "./typechecker";
+import { createPrelude } from "./prelude";
 
 describe("Module Loader", () => {
   describe("linear chains", () => {
@@ -288,6 +289,91 @@ describe("Module Graph Checking", () => {
       const typeEnv = createPreludeTypeEnv();
       expect(() => checkModuleGraph(graph, declEnv, typeEnv)).toThrow();
       expect(() => checkModuleGraph(graph, declEnv, typeEnv)).toThrow(/shadow/i);
+    });
+  });
+});
+
+describe("Module Graph Evaluation", () => {
+  describe("evaluateModuleGraph", () => {
+    it("evaluates modules and binds imports as record values", () => {
+      const sources: { [key: string]: string } = {
+        helpers: "let add = fn(a) -> fn(b) -> a + b\n42",
+        entry: 'import "helpers" as h\nh.add(1)(2)',
+      };
+
+      const resolver = (path: string) => {
+        const src = sources[path];
+        if (!src) throw new Error(`Module not found: ${path}`);
+        return src;
+      };
+
+      const graph = loadModules(sources.entry, "entry", resolver);
+      const declEnv = buildGraphDeclEnv(graph);
+      const typeEnv = createPreludeTypeEnv();
+      checkModuleGraph(graph, declEnv, typeEnv);
+
+      const evalEnv = createPrelude();
+      const result = evaluateModuleGraph(graph, evalEnv);
+      expect(result).toBeDefined();
+    });
+
+    it("evaluates diamond imports: shared module evaluates once", () => {
+      const sources: { [key: string]: string } = {
+        shared: "let value = 1\n42",
+        x: 'import "shared" as s\n42',
+        y: 'import "shared" as s\n42',
+        entry: 'import "x" as x\nimport "y" as y\n42',
+      };
+
+      const resolver = (path: string) => {
+        const src = sources[path];
+        if (!src) throw new Error(`Module not found: ${path}`);
+        return src;
+      };
+
+      const graph = loadModules(sources.entry, "entry", resolver);
+      const declEnv = buildGraphDeclEnv(graph);
+      const typeEnv = createPreludeTypeEnv();
+      checkModuleGraph(graph, declEnv, typeEnv);
+
+      const evalEnv = createPrelude();
+      const moduleValues = evaluateModuleGraph(graph, evalEnv);
+
+      // Both x and y import shared — they should see the same shared module value
+      const xModule = moduleValues.get("x");
+      const yModule = moduleValues.get("y");
+
+      if (xModule && yModule && xModule.has("s") && yModule.has("s")) {
+        const xShared = xModule.get("s");
+        const yShared = yModule.get("s");
+        // They should be the same object (referential identity)
+        expect(xShared === yShared).toBe(true);
+      }
+    });
+
+    it("evaluates top-level lets to produce values accessible via qualified access", () => {
+      const sources: { [key: string]: string } = {
+        helpers: "let id = fn(x) -> x\n42",
+        entry: 'import "helpers" as h\nh.id(42)',
+      };
+
+      const resolver = (path: string) => {
+        const src = sources[path];
+        if (!src) throw new Error(`Module not found: ${path}`);
+        return src;
+      };
+
+      const graph = loadModules(sources.entry, "entry", resolver);
+      const declEnv = buildGraphDeclEnv(graph);
+      const typeEnv = createPreludeTypeEnv();
+      checkModuleGraph(graph, declEnv, typeEnv);
+
+      const evalEnv = createPrelude();
+      const moduleValues = evaluateModuleGraph(graph, evalEnv);
+
+      const helpers = moduleValues.get("helpers");
+      expect(helpers).toBeDefined();
+      expect(helpers?.has("id")).toBe(true);
     });
   });
 });

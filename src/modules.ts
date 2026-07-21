@@ -3,6 +3,7 @@ import { parseProgram, Program } from "./parser";
 import { buildDeclEnv, createPreludeDeclEnv, DeclEnv } from "./decls";
 import { RillError } from "./errors";
 import { inferTopLevelLets, TypeEnv } from "./typechecker";
+import { evaluateProgram, Value } from "./evaluator";
 
 export type Resolver = (path: string) => string;
 
@@ -254,4 +255,67 @@ export function checkModuleGraph(
   }
 
   return moduleExports;
+}
+
+/**
+ * Evaluates all modules in the graph in topological order.
+ * Each module's top-level lets evaluate once. Import aliases are bound as Record values
+ * of the exporting module's bindings, enabling qualified access (h.func).
+ *
+ * @param graph The module graph from loadModules
+ * @param baseEnv The prelude runtime environment
+ * @returns Map from module path to module's evaluated value bindings
+ */
+export function evaluateModuleGraph(
+  graph: ModuleGraph,
+  baseEnv: Map<string, Value>
+): Map<string, Map<string, Value>> {
+  const moduleValues = new Map<string, Map<string, Value>>();
+
+  // Process modules in topological order
+  for (const modulePath of graph.order) {
+    const loadedModule = graph.modules.get(modulePath)!;
+    const program = loadedModule.program;
+
+    // Build evaluation environment with prelude + imports
+    let moduleEnv = new Map(baseEnv);
+
+    // Add imports: each import alias is bound to the exporting module's record value
+    for (const importDecl of program.imports) {
+      const importedModuleValues = moduleValues.get(importDecl.path);
+      if (importedModuleValues) {
+        // Create a Record value from the module's exports
+        const importedRecord: Value = {
+          kind: "Record",
+          fields: new Map(importedModuleValues),
+        };
+        moduleEnv.set(importDecl.alias, importedRecord);
+      }
+    }
+
+    // Evaluate the module's body and extract top-level let bindings
+    const bindings = new Map<string, Value>();
+    let current = program.body;
+
+    while (current.kind === "Let") {
+      // Evaluate the let value in the current environment
+      const value = evaluateProgram(
+        { imports: [], declarations: [], header: null, body: current.value },
+        moduleEnv
+      );
+      bindings.set(current.name, value);
+
+      // Add to environment for subsequent lets
+      moduleEnv.set(current.name, value);
+      current = current.body;
+    }
+
+    // Also evaluate the remaining body to ensure it doesn't error
+    evaluateProgram({ imports: [], declarations: [], header: null, body: current }, moduleEnv);
+
+    // Store this module's bindings
+    moduleValues.set(modulePath, bindings);
+  }
+
+  return moduleValues;
 }
