@@ -1,6 +1,8 @@
 -- Todo App Demo
 -- Showcases records, tagged values, pipelines, pattern matching, and error handling
 
+type TodoStatus = Done | Todo
+
 let todos = [
   { title: "Learn Rill", status: Done },
   { title: "Write a demo", status: Todo },
