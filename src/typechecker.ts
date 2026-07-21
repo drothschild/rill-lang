@@ -581,7 +581,7 @@ function checkExhaustiveness(
       if (!hasTrueArm) missing.push("true");
       if (!hasFalseArm) missing.push("false");
       throw typeError(
-        `This match does not cover all possible values of Bool.\nMissing patterns: ${missing.map(m => `  - ${m}`).join("\n")}`,
+        `This match does not cover all possible values of Bool.\nMissing patterns:\n${missing.map(m => `  - ${m}`).join("\n")}`,
         span
       );
     }

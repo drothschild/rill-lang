@@ -824,7 +824,7 @@ describe("Task 5: Coverage for Bool and non-union subjects", () => {
 
   it("Bool missing false is inexhaustive", () => {
     const source = `match true { true -> 1 }`;
-    expect(() => typeOf(source)).toThrow(/missing.*false/i);
+    expect(() => typeOf(source)).toThrow(/Missing patterns:\n\s*- false/);
   });
 
   it("Int literals require catch-all", () => {
