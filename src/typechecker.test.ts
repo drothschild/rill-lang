@@ -103,8 +103,15 @@ describe("Type Inference", () => {
       expect(t).toMatch(/-> {.*\|/);
     });
 
+    it("AC2.2 open-base scope pin: open-base fn grows row, call site with closed record lacking field errors", () => {
+      // The function itself typechecks (row grows, no error yet)
+      expect(() => typeOf('fn(s) -> { s | b: 2 }')).not.toThrow();
+      // But applying it to a closed record lacking field b errors at the call site
+      expect(() => typeOf('let f = fn(s) -> { s | b: 2 } in f({ a: 1 })')).toThrow(/b/);
+    });
+
     it("rejects record update on closed record with absent field", () => {
-      expect(() => typeOf('let s = { a: 1 } in { s | b: 2 }')).toThrow(/field|absent|No field/i);
+      expect(() => typeOf('let s = { a: 1 } in { s | b: 2 }')).toThrow(/b/);
     });
 
     it("rejects record update with type mismatch on field", () => {
@@ -140,6 +147,24 @@ describe("Type Inference", () => {
       expect(t).toMatch(/->/);
       expect(t).toContain("a");
       expect(t).toContain("b");
+    });
+
+    it("AC2.2 Phase-1 ADT integration: record update with declared union field type", () => {
+      // With a declared ADT for the field, record update should accept constructor values
+      const source = `type Phase = Idle | Resting
+        let s = { phase: Idle, n: 0 } in
+        { s | phase: Resting }`;
+      const t = typeOfProgram(source);
+      expect(t).toContain("phase: Phase");
+      expect(t).toContain("n: Int");
+    });
+
+    it("AC2.2 Phase-1 ADT integration: record update rejects wrong type for ADT field", () => {
+      // Assigning wrong type to ADT field should error
+      const source = `type Phase = Idle | Resting
+        let s = { phase: Idle, n: 0 } in
+        { s | phase: 1 }`;
+      expect(() => typeOfProgram(source)).toThrow();
     });
 
     it("infers tagged value type", () => {
