@@ -320,5 +320,136 @@ describe("rule headers", () => {
         expect(result.errors.length).toBeGreaterThan(0);
       });
     });
+
+    describe("Task 6: Module system integration", () => {
+      it("backwards compatible: no options = no-import behavior", () => {
+        const result = checkRuleSource(`
+          rule f(x: Int) -> Int
+          x + 1
+        `);
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+      });
+
+      it("import without resolver → clear error", () => {
+        const result = checkRuleSource(`
+          import "helpers" as h
+          rule f(x: Int) -> Int
+          x + 1
+        `);
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0]).toMatch(/import|resolver/i);
+      });
+
+      it("rule header can reference imported types", () => {
+        const helperSource = `
+          type Stage = Idle | Working
+          let dummy = 1
+          0
+        `;
+        const resolver = (path: string) => {
+          if (path === "helpers") return helperSource;
+          throw new Error(`Unknown import: ${path}`);
+        };
+        const result = checkRuleSource(
+          `
+          import "helpers" as h
+          rule f(s: Stage) -> String
+          match s { Idle -> "idle", Working -> "working" }
+          `,
+          { resolve: resolver, path: "entry" }
+        );
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+        expect(result.header!.name).toBe("f");
+      });
+
+      it("broken helper → ok:false located in helper", () => {
+        const helperSource = `
+          type Stage = Idle | Working
+          let broken = 1 + "x"
+          0
+        `;
+        const resolver = (path: string) => {
+          if (path === "helpers") return helperSource;
+          throw new Error(`Unknown import: ${path}`);
+        };
+        const result = checkRuleSource(
+          `
+          import "helpers" as h
+          rule f(x: Int) -> Int
+          x + 1
+          `,
+          { resolve: resolver, path: "entry" }
+        );
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0]).toMatch(/helpers/);
+      });
+
+      it("import cycle → ok:false with full chain", () => {
+        const aSource = `import "b" as b\nlet a = 1\n0`;
+        const bSource = `import "a" as a\nlet b = 2\n0`;
+        const resolver = (path: string) => {
+          if (path === "a") return aSource;
+          if (path === "b") return bSource;
+          throw new Error(`Unknown import: ${path}`);
+        };
+        const result = checkRuleSource(
+          `
+          import "a" as a
+          rule f(x: Int) -> Int
+          x + 1
+          `,
+          { resolve: resolver, path: "entry" }
+        );
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0]).toMatch(/cycle|->.*->.*->/);
+      });
+
+      it("qualified value access in rule body", () => {
+        const helperSource = `
+          let add = fn(a) -> fn(b) -> a + b
+          0
+        `;
+        const resolver = (path: string) => {
+          if (path === "helpers") return helperSource;
+          throw new Error(`Unknown import: ${path}`);
+        };
+        const result = checkRuleSource(
+          `
+          import "helpers" as h
+          rule f(x: Int) -> Int
+          h.add(x)(1)
+          `,
+          { resolve: resolver, path: "entry" }
+        );
+        expect(result.ok).toBe(true);
+        expect(result.errors).toEqual([]);
+      });
+
+      it("unknown module export → error naming available exports", () => {
+        const helperSource = `
+          let add(a: Int, b: Int) = a + b
+          0
+        `;
+        const resolver = (path: string) => {
+          if (path === "helpers") return helperSource;
+          throw new Error(`Unknown import: ${path}`);
+        };
+        const result = checkRuleSource(
+          `
+          import "helpers" as h
+          rule f(x: Int) -> Int
+          h.nonexistent(x, 1)
+          `,
+          { resolve: resolver, path: "entry" }
+        );
+        expect(result.ok).toBe(false);
+        expect(result.errors.length).toBeGreaterThan(0);
+      });
+    });
   });
 });

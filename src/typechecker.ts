@@ -106,12 +106,26 @@ function typeError(msg: string, span: Span): Error {
   return new TypeError(msg);
 }
 
-export function infer(expr: Expr, env?: TypeEnv, source?: string, declEnv?: DeclEnv): Type {
+export function infer(
+  expr: Expr,
+  env?: TypeEnv,
+  source?: string,
+  declEnv?: DeclEnv,
+  importAliases?: Map<string, string>,
+  moduleExports?: Map<string, Map<string, Scheme>>
+): Type {
   _source = source;
-  const defaultEnv: TypeEnv = env ?? new Map();
-  const defaultDeclEnv: DeclEnv = declEnv ?? createPreludeDeclEnv();
-  const [type, subst] = inferExpr(expr, defaultEnv, new Map(), defaultDeclEnv);
-  return applySubst(subst, type);
+  _importAliases = importAliases;
+  _moduleExports = moduleExports;
+  try {
+    const defaultEnv: TypeEnv = env ?? new Map();
+    const defaultDeclEnv: DeclEnv = declEnv ?? createPreludeDeclEnv();
+    const [type, subst] = inferExpr(expr, defaultEnv, new Map(), defaultDeclEnv);
+    return applySubst(subst, type);
+  } finally {
+    _importAliases = undefined;
+    _moduleExports = undefined;
+  }
 }
 
 function withSpan<T>(fn: () => T, span: Span): T {

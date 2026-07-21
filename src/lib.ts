@@ -5,9 +5,12 @@ export { lex } from './lexer';
 export { parse, parseProgram } from './parser';
 export type { Program, RuleHeader, RuleParam } from './parser';
 export { checkRuleSource } from './rules';
-export type { RuleCheckResult } from './rules';
+export type { RuleCheckResult, CheckRuleOptions } from './rules';
 export { Value, prettyPrint } from './values';
 export { runSource } from './runner';
+
+// Module system API for embedders.
+export type { Resolver } from './modules';
 
 // Load-time type-checking API for embedders.
 export { infer, createPreludeTypeEnv, bindType } from './typechecker';

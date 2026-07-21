@@ -5,6 +5,7 @@ import { unify } from "./unify";
 import { prettyType, resetTypeVarCounter } from "./types";
 import { buildDeclEnv, createPreludeDeclEnv, resolveTypeAnn } from "./decls";
 import { RillError } from "./errors";
+import { Resolver, loadModules, buildGraphDeclEnv, checkModuleGraph } from "./modules";
 
 export interface RuleCheckResult {
   ok: boolean;
@@ -12,12 +13,18 @@ export interface RuleCheckResult {
   header: RuleHeader | null;
 }
 
+export interface CheckRuleOptions {
+  resolve?: Resolver;
+  path?: string;
+}
+
 // Load-time check for a self-describing rule file: parse the `rule` header,
 // build a declaration environment from the file's declarations, bind its declared
 // params over the prelude type env, infer the body, and unify the inferred type
 // with the declared return type (when present).
 // Never throws — parse and type errors are collected into `errors`.
-export function checkRuleSource(source: string): RuleCheckResult {
+// Supports optional module loading via a resolver.
+export function checkRuleSource(source: string, options?: CheckRuleOptions): RuleCheckResult {
   let header: RuleHeader | null = null;
   const errors: string[] = [];
   try {
@@ -32,10 +39,47 @@ export function checkRuleSource(source: string): RuleCheckResult {
       };
     }
 
-    // Build the declaration environment from the file's declarations
+    // Load modules if imports are present
     let declEnv;
+    let graphDeclEnv = createPreludeDeclEnv();
+    let moduleExports;
+
+    if (program.imports.length > 0) {
+      // Check if resolver is provided
+      if (!options?.resolve) {
+        return {
+          ok: false,
+          errors: ["this rule imports modules but no resolver was provided"],
+          header,
+        };
+      }
+
+      // Load and check the module graph
+      try {
+        const entryPath = options.path || "entry";
+        const moduleGraph = loadModules(source, entryPath, options.resolve);
+        graphDeclEnv = buildGraphDeclEnv(moduleGraph);
+
+        // Check only helper modules, excluding the entry module itself
+        // (entry is a rule module, helpers are utility modules with let bindings)
+        const helperGraph: typeof moduleGraph = {
+          modules: new Map(
+            [...moduleGraph.modules.entries()].filter(([path]) => path !== entryPath)
+          ),
+          order: moduleGraph.order.filter(path => path !== entryPath),
+        };
+        if (helperGraph.order.length > 0) {
+          moduleExports = checkModuleGraph(helperGraph, graphDeclEnv, createPreludeTypeEnv());
+        }
+      } catch (e: unknown) {
+        const message = e instanceof RillError ? e.message : (e instanceof Error ? e.message : String(e));
+        return { ok: false, errors: [message], header };
+      }
+    }
+
+    // Build the declaration environment from the file's declarations
     try {
-      declEnv = buildDeclEnv(program.declarations, createPreludeDeclEnv());
+      declEnv = buildDeclEnv(program.declarations, graphDeclEnv);
     } catch (e: unknown) {
       if (e instanceof RillError) {
         errors.push(e.message);
@@ -47,11 +91,20 @@ export function checkRuleSource(source: string): RuleCheckResult {
       }
     }
 
+    // Use merged declaration environment for resolving header types
+    const fullDeclEnv = declEnv || graphDeclEnv;
+
+    // Build import aliases map for qualified access
+    const importAliasMap = new Map<string, string>();
+    for (const importDecl of program.imports) {
+      importAliasMap.set(importDecl.alias, importDecl.path);
+    }
+
     // Resolve and validate header parameter types
     const resolvedParams = [];
     for (const param of header.params) {
       try {
-        const resolvedType = resolveTypeAnn(param.type, declEnv!, undefined, param.span, source);
+        const resolvedType = resolveTypeAnn(param.type, fullDeclEnv, undefined, param.span, source);
         resolvedParams.push({ ...param, type: resolvedType });
       } catch (e: unknown) {
         if (e instanceof RillError) {
@@ -66,7 +119,7 @@ export function checkRuleSource(source: string): RuleCheckResult {
     let resolvedReturnType = header.returnType;
     if (header.returnType && header.returnTypeSpan) {
       try {
-        resolvedReturnType = resolveTypeAnn(header.returnType, declEnv!, undefined, header.returnTypeSpan, source);
+        resolvedReturnType = resolveTypeAnn(header.returnType, fullDeclEnv, undefined, header.returnTypeSpan, source);
       } catch (e: unknown) {
         if (e instanceof RillError) {
           errors.push(e.message);
@@ -86,8 +139,15 @@ export function checkRuleSource(source: string): RuleCheckResult {
       env = bindType(env, param.name, param.type);
     }
 
-    // Infer the body with the declaration environment
-    const inferred = infer(program.body, env, source, declEnv);
+    // Infer the body with the full declaration environment and module info
+    const inferred = infer(
+      program.body,
+      env,
+      source,
+      fullDeclEnv,
+      importAliasMap.size > 0 ? importAliasMap : undefined,
+      moduleExports
+    );
 
     if (resolvedReturnType) {
       try {
