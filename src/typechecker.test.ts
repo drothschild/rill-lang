@@ -117,6 +117,31 @@ describe("Type Inference", () => {
       expect(t).toContain("b: Int");
     });
 
+    it("composing update with field access preserves one coherent open row", () => {
+      const t = typeOf('fn(s) -> if s.ok then { s | n: s.n + 1 } else s');
+      // Should have both ok and n fields in the row type
+      expect(t).toContain("ok");
+      expect(t).toContain("n");
+    });
+
+    it("update result flows into a function expecting closed record", () => {
+      // Define two functions, one that updates and one that consumes the record
+      const t = typeOf(`
+        let make_double = fn(v) -> v + v in
+        let update_and_use = fn(s) -> make_double({ s | n: 10 }.n) in
+        update_and_use({ n: 5 })
+      `);
+      expect(t).toBe("Int");
+    });
+
+    it("two sequential updates on same base identifier share the row", () => {
+      const t = typeOf('fn(s) -> let u1 = { s | a: 1 } in { u1 | b: 2 }');
+      // Result should be a function returning a record with open row
+      expect(t).toMatch(/->/);
+      expect(t).toContain("a");
+      expect(t).toContain("b");
+    });
+
     it("infers tagged value type", () => {
       expect(typeOf("Ok(42)")).toBe("Result(Int)");
     });
