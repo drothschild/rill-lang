@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { loadModules } from "./modules";
+import { loadModules, buildGraphDeclEnv } from "./modules";
 import { lex } from "./lexer";
+import { RillError } from "./errors";
 
 describe("Module Loader", () => {
   describe("linear chains", () => {
@@ -102,6 +103,83 @@ describe("Module Loader", () => {
       };
 
       expect(() => loadModules(sources.entry, "entry", resolver)).toThrow(/missing/);
+    });
+  });
+});
+
+describe("Declaration Environment Merging", () => {
+  describe("buildGraphDeclEnv", () => {
+    it("merges type declarations from modules in topological order", () => {
+      const sources: { [key: string]: string } = {
+        t: "type Phase = Idle | Working\n42",
+        entry: 'import "t" as t\n42',
+      };
+
+      const resolver = (path: string) => {
+        const src = sources[path];
+        if (!src) throw new Error(`Module not found: ${path}`);
+        return src;
+      };
+
+      const graph = loadModules(sources.entry, "entry", resolver);
+      const declEnv = buildGraphDeclEnv(graph);
+
+      expect(declEnv.unions.has("Phase")).toBe(true);
+      expect(declEnv.ctors.has("Idle")).toBe(true);
+      expect(declEnv.ctors.has("Working")).toBe(true);
+    });
+
+    it("detects collision of same type name across modules", () => {
+      const sources: { [key: string]: string } = {
+        x: "type Phase = Idle | Working\n42",
+        y: "type Phase = Setup | Running\n42",
+        entry: 'import "x" as x\nimport "y" as y\n42',
+      };
+
+      const resolver = (path: string) => {
+        const src = sources[path];
+        if (!src) throw new Error(`Module not found: ${path}`);
+        return src;
+      };
+
+      const graph = loadModules(sources.entry, "entry", resolver);
+      expect(() => buildGraphDeclEnv(graph)).toThrow();
+      expect(() => buildGraphDeclEnv(graph)).toThrow(/Phase/);
+    });
+
+    it("detects collision with prelude (type Result)", () => {
+      const sources: { [key: string]: string } = {
+        m: "type Result = Good | Bad\n42",
+        entry: 'import "m" as m\n42',
+      };
+
+      const resolver = (path: string) => {
+        const src = sources[path];
+        if (!src) throw new Error(`Module not found: ${path}`);
+        return src;
+      };
+
+      const graph = loadModules(sources.entry, "entry", resolver);
+      expect(() => buildGraphDeclEnv(graph)).toThrow();
+      expect(() => buildGraphDeclEnv(graph)).toThrow(/Result/);
+    });
+
+    it("detects collision of constructor names across modules", () => {
+      const sources: { [key: string]: string } = {
+        x: "type Status = Idle | Working\n42",
+        y: "type State = Idle | Done\n42",
+        entry: 'import "x" as x\nimport "y" as y\n42',
+      };
+
+      const resolver = (path: string) => {
+        const src = sources[path];
+        if (!src) throw new Error(`Module not found: ${path}`);
+        return src;
+      };
+
+      const graph = loadModules(sources.entry, "entry", resolver);
+      expect(() => buildGraphDeclEnv(graph)).toThrow();
+      expect(() => buildGraphDeclEnv(graph)).toThrow(/Idle/);
     });
   });
 });

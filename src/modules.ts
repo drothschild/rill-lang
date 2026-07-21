@@ -1,5 +1,7 @@
 import { lex } from "./lexer";
 import { parseProgram, Program } from "./parser";
+import { buildDeclEnv, createPreludeDeclEnv, DeclEnv } from "./decls";
+import { RillError } from "./errors";
 
 export type Resolver = (path: string) => string;
 
@@ -78,4 +80,106 @@ export function loadModules(
   loadModule(entrySource, entryKey);
 
   return { modules, order };
+}
+
+/**
+ * Builds a merged declaration environment from all modules in the graph.
+ * Processes modules in topological order, detecting cross-module collision errors.
+ * Error messages name the colliding name AND both module paths.
+ *
+ * @param graph The module graph from loadModules
+ * @returns A merged DeclEnv with all module declarations
+ * @throws RillError if a duplicate type/alias/constructor is detected across modules or with prelude
+ */
+export function buildGraphDeclEnv(graph: ModuleGraph): DeclEnv {
+  const preludeEnv = createPreludeDeclEnv();
+
+  // Map to track which module each declaration came from (for error reporting)
+  const declSources = new Map<string, string>(); // name -> modulePath
+
+  // Add prelude declarations to the tracker
+  for (const name of preludeEnv.unions.keys()) {
+    declSources.set(name, "prelude");
+  }
+  for (const name of preludeEnv.aliases.keys()) {
+    declSources.set(name, "prelude");
+  }
+  for (const name of preludeEnv.ctors.keys()) {
+    declSources.set(name, "prelude");
+  }
+
+  // Start with prelude env
+  let mergedEnv = preludeEnv;
+
+  // Process modules in topological order
+  for (const modulePath of graph.order) {
+    const loadedModule = graph.modules.get(modulePath)!;
+    const moduleDecls = loadedModule.program.declarations;
+
+    // Build a module-specific env to collect its names
+    try {
+      const moduleEnv = buildDeclEnv(moduleDecls);
+
+      // Try to merge with the existing environment
+      // Check for collisions before actually merging
+      for (const name of moduleEnv.unions.keys()) {
+        if (mergedEnv.unions.has(name) || mergedEnv.aliases.has(name)) {
+          const existingModule = declSources.get(name)!;
+          throw new Error(
+            `Duplicate type/alias name: ${name} (declared in both "${existingModule}" and "${modulePath}")`
+          );
+        }
+      }
+
+      for (const name of moduleEnv.aliases.keys()) {
+        if (mergedEnv.unions.has(name) || mergedEnv.aliases.has(name)) {
+          const existingModule = declSources.get(name)!;
+          throw new Error(
+            `Duplicate type/alias name: ${name} (declared in both "${existingModule}" and "${modulePath}")`
+          );
+        }
+      }
+
+      for (const name of moduleEnv.ctors.keys()) {
+        if (mergedEnv.ctors.has(name)) {
+          const existingModule = declSources.get(name)!;
+          const existingUnion = mergedEnv.ctors.get(name)!.union;
+          const newUnion = moduleEnv.ctors.get(name)!.union;
+          throw new Error(
+            `Constructor ${name} defined in both ${existingUnion} (from "${existingModule}") and ${newUnion} (from "${modulePath}")`
+          );
+        }
+      }
+
+      // No collisions - perform the merge
+      mergedEnv = {
+        unions: new Map([...mergedEnv.unions, ...moduleEnv.unions]),
+        aliases: new Map([...mergedEnv.aliases, ...moduleEnv.aliases]),
+        ctors: new Map([...mergedEnv.ctors, ...moduleEnv.ctors]),
+      };
+
+      // Track the source of each declaration
+      for (const name of moduleEnv.unions.keys()) {
+        declSources.set(name, modulePath);
+      }
+      for (const name of moduleEnv.aliases.keys()) {
+        declSources.set(name, modulePath);
+      }
+      for (const name of moduleEnv.ctors.keys()) {
+        declSources.set(name, modulePath);
+      }
+    } catch (error) {
+      // Re-throw as a RillError if it's from our collision detection
+      if (error instanceof Error && error.message.includes("Duplicate")) {
+        throw new RillError(error.message, undefined as any);
+      }
+      // Or if it's already a RillError from buildDeclEnv
+      if (error instanceof RillError) {
+        throw error;
+      }
+      throw error;
+    }
+  }
+
+  return mergedEnv;
 }
