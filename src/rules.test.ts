@@ -145,16 +145,72 @@ describe("rule headers", () => {
     });
 
     it("typechecks the real validation rule shape", () => {
-      // This test will pass once Task 8-11 implement TUnion support in the typechecker.
-      // For now, Result is parsed as TUnion("Result", [...]) but the typechecker
-      // doesn't know how to handle TUnion yet.
+      // With Task 8-11 TUnion support implemented, this now works
       const result = checkRuleSource(`
         rule validation(job: { company_name: String, role: String, salary_min: Int, salary_max: Int }) -> Result(String)
         let _ = require(str_len(job.company_name) > 0, "Company name is required")?
         Ok("valid")
       `);
-      // Currently fails because typechecker doesn't support TUnion yet (Task 8+)
+      expect(result.ok).toBe(true);
+    });
+
+    it("accepts a rule file with declared type constructors", () => {
+      const result = checkRuleSource(`
+        type Stage = Applied | Rejected
+        rule f(s: Stage) -> Bool
+        match s { Applied -> true, Rejected -> false }
+      `);
+      expect(result.ok).toBe(true);
+      expect(result.errors).toEqual([]);
+    });
+
+    it("accepts a rule file with an alias in the header", () => {
+      const result = checkRuleSource(`
+        alias Job = { company_name: String }
+        rule f(job: Job) -> Bool
+        str_len(job.company_name) > 0
+      `);
+      expect(result.ok).toBe(true);
+      expect(result.errors).toEqual([]);
+    });
+
+    it("allows alias and inline-structural forms to unify", () => {
+      const result = checkRuleSource(`
+        alias Job = { company_name: String }
+        rule f(job: Job) -> { company_name: String }
+        job
+      `);
+      expect(result.ok).toBe(true);
+      expect(result.errors).toEqual([]);
+    });
+
+    it("accepts Option type in headers", () => {
+      const result = checkRuleSource(`
+        rule f(x: Option(Float)) -> Float
+        match x { Some(v) -> v, None -> 0.0 }
+      `);
+      expect(result.ok).toBe(true);
+      expect(result.errors).toEqual([]);
+    });
+
+    it("rejects a header with an unknown type name", () => {
+      const result = checkRuleSource(`
+        rule f(x: Stge) -> Bool
+        true
+      `);
       expect(result.ok).toBe(false);
+      expect(result.errors.length).toBeGreaterThan(0);
+      expect(result.errors[0]).toContain("Stge");
+    });
+
+    it("provides did-you-mean suggestion for typo in type name", () => {
+      const result = checkRuleSource(`
+        type Stage = Applied | Rejected
+        rule f(x: Stge) -> Bool
+        true
+      `);
+      expect(result.ok).toBe(false);
+      expect(result.errors[0]).toContain("Stage");
     });
   });
 });

@@ -25,4 +25,36 @@ describe("File Runner", () => {
     `);
     expect(result.output).toBe("84");
   });
+
+  it("runs a program with declared type constructors", () => {
+    const result = runSource(`
+      type Phase = Idle | Working
+      match Idle { Idle -> 1, Working -> 2 }
+    `);
+    expect(result.output).toBe("1");
+  });
+
+  it("runs a program with aliases", () => {
+    const result = runSource(`
+      alias Rec = { x: Int, y: Int }
+      let r = { x: 1, y: 2 }
+      in r.x + r.y
+    `);
+    expect(result.output).toBe("3");
+  });
+
+  it("runs a program with Option type", () => {
+    const result = runSource(`
+      match Some(42) { Some(x) -> x * 2, None -> 0 }
+    `);
+    expect(result.output).toBe("84");
+  });
+
+  it("rejects a program with unknown type names", () => {
+    const result = runSource(`
+      rule f(x: Badtype) -> Bool
+      true
+    `);
+    expect(result.error).toBeTruthy();
+  });
 });

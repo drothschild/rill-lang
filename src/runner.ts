@@ -6,6 +6,7 @@ import { prettyPrint } from "./values";
 import { resetTypeVarCounter } from "./types";
 import { createPrelude } from "./prelude";
 import { RillError } from "./errors";
+import { buildDeclEnv, createPreludeDeclEnv, resolveTypeAnn } from "./decls";
 
 interface RunResult {
   output?: string;
@@ -17,6 +18,17 @@ export function runSource(source: string): RunResult {
     const tokens = lex(source);
     const program = parseProgram(tokens);
 
+    // Build the declaration environment from the file's declarations
+    let declEnv;
+    try {
+      declEnv = buildDeclEnv(program.declarations, createPreludeDeclEnv());
+    } catch (e: any) {
+      if (e instanceof RillError) {
+        return { error: e.message };
+      }
+      throw e;
+    }
+
     // Type check — only block on RillError (formatted type errors with source info)
     // Skip TypeError from inference limitations (missing prelude types, no sum types)
     // Files with a `rule` header are checked against the full prelude + declared params.
@@ -24,12 +36,36 @@ export function runSource(source: string): RunResult {
     try {
       if (program.header) {
         let typeEnv = createPreludeTypeEnv();
+
+        // Resolve and validate header parameter types
         for (const param of program.header.params) {
-          typeEnv = bindType(typeEnv, param.name, param.type);
+          try {
+            const resolvedType = resolveTypeAnn(param.type, declEnv);
+            typeEnv = bindType(typeEnv, param.name, resolvedType);
+          } catch (e: any) {
+            if (e instanceof RillError) {
+              return { error: e.message };
+            }
+            throw e;
+          }
         }
-        infer(program.body, typeEnv, source);
+
+        // Resolve return type if present
+        let resolvedReturnType = program.header.returnType;
+        if (program.header.returnType) {
+          try {
+            resolvedReturnType = resolveTypeAnn(program.header.returnType, declEnv);
+          } catch (e: any) {
+            if (e instanceof RillError) {
+              return { error: e.message };
+            }
+            throw e;
+          }
+        }
+
+        infer(program.body, typeEnv, source, declEnv);
       } else {
-        infer(program.body, undefined, source);
+        infer(program.body, undefined, source, declEnv);
       }
     } catch (e: any) {
       if (e instanceof RillError) {

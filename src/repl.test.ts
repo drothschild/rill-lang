@@ -36,4 +36,25 @@ describe("REPL Session", () => {
     const result2 = session.eval("1 + 2");
     expect(result2.output).toBe("3");
   });
+
+  it("supports single-line type declarations", () => {
+    const session = new ReplSession();
+    const result = session.eval("type Phase = Idle | Working");
+    // Declaration doesn't produce output
+    expect(result.error).toBeFalsy();
+  });
+
+  it("evaluates constructor expressions after type declaration", () => {
+    const session = new ReplSession();
+    session.eval("type Phase = Idle | Working");
+    const result = session.eval("Idle");
+    expect(result.output).toContain("Idle");
+  });
+
+  it("matches on declared constructors in REPL", () => {
+    const session = new ReplSession();
+    session.eval("type Phase = Idle | Working");
+    const result = session.eval("match Idle { Idle -> 1, Working -> 2 }");
+    expect(result.output).toBe("1");
+  });
 });
