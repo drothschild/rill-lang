@@ -98,6 +98,8 @@ function applySubstEnv(subst: Substitution, env: TypeEnv): TypeEnv {
 }
 
 let _source: string | undefined;
+let _importAliases: Map<string, string> | undefined;  // alias -> modulePath
+let _moduleExports: Map<string, Map<string, Scheme>> | undefined;  // modulePath -> name -> Scheme
 
 function typeError(msg: string, span: Span): Error {
   if (_source) return new RillError(msg, span, _source);
@@ -273,6 +275,27 @@ function inferExpr(expr: Expr, env: TypeEnv, subst: Substitution, declEnv: DeclE
     }
 
     case "FieldAccess": {
+      // Check if this is a module qualified access (alias.name)
+      if (expr.expr.kind === "Ident" && _importAliases && _moduleExports) {
+        const alias = expr.expr.name;
+        const modulePath = _importAliases.get(alias);
+        if (modulePath) {
+          const moduleSchemes = _moduleExports.get(modulePath);
+          if (moduleSchemes) {
+            const scheme = moduleSchemes.get(expr.field);
+            if (scheme) {
+              return [instantiate(scheme), subst];
+            }
+            // Unknown export - list available exports
+            const availableExports = Array.from(moduleSchemes.keys()).join(", ");
+            throw typeError(
+              `Unknown export "${expr.field}" from module "${modulePath}". Available exports: ${availableExports}`,
+              expr.span
+            );
+          }
+        }
+      }
+
       const [recT, s1] = inferExpr(expr.expr, env, subst, declEnv);
       const resolved = applySubst(s1, recT);
       if (resolved.kind === "TRecord") {
@@ -823,4 +846,46 @@ export function bindType(env: TypeEnv, name: string, t: Type): TypeEnv {
   const next = new Map(env);
   next.set(name, mono(t));
   return next;
+}
+
+// Helper to extract and infer top-level let bindings from an expression.
+// Returns a map of name -> (scheme, remaining body expression).
+// Used by module graph checking to infer let schemes in order.
+export function inferTopLevelLets(
+  expr: Expr,
+  env: TypeEnv,
+  source: string,
+  declEnv: DeclEnv,
+  importAliases?: Map<string, string>,
+  moduleExports?: Map<string, Map<string, Scheme>>
+): Map<string, Scheme> {
+  _source = source;
+  _importAliases = importAliases;
+  _moduleExports = moduleExports;
+  const schemes = new Map<string, Scheme>();
+  let current = expr;
+  let currentEnv = env;
+  let subst = new Map<number, Type>();
+
+  try {
+    while (current.kind === "Let") {
+      const [valT, s1] = inferExpr(current.value, currentEnv, subst, declEnv);
+      const scheme = current.rec ? mono(valT) : generalize(currentEnv, valT, s1);
+      schemes.set(current.name, scheme);
+
+      // Add to env for subsequent lets
+      currentEnv = new Map(currentEnv);
+      currentEnv.set(current.name, scheme);
+      subst = s1;
+      current = current.body;
+    }
+
+    // Also infer the remaining body to catch type errors
+    inferExpr(current, currentEnv, subst, declEnv);
+  } finally {
+    _importAliases = undefined;
+    _moduleExports = undefined;
+  }
+
+  return schemes;
 }

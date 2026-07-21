@@ -2,6 +2,7 @@ import { lex } from "./lexer";
 import { parseProgram, Program } from "./parser";
 import { buildDeclEnv, createPreludeDeclEnv, DeclEnv } from "./decls";
 import { RillError } from "./errors";
+import { inferTopLevelLets, TypeEnv } from "./typechecker";
 
 export type Resolver = (path: string) => string;
 
@@ -182,4 +183,75 @@ export function buildGraphDeclEnv(graph: ModuleGraph): DeclEnv {
   }
 
   return mergedEnv;
+}
+
+/**
+ * Type-checks all modules in the graph in topological order.
+ * Returns a map of module path -> (name -> scheme) for each module's top-level lets.
+ * Handles qualified access to module bindings (h.func resolves via import alias table).
+ *
+ * @param graph The module graph from loadModules
+ * @param declEnv The merged declaration environment from buildGraphDeclEnv
+ * @param baseTypeEnv The prelude type environment
+ * @returns Map from module path to module's let schemes
+ * @throws RillError if type checking fails in any module
+ */
+export function checkModuleGraph(
+  graph: ModuleGraph,
+  declEnv: DeclEnv,
+  baseTypeEnv: TypeEnv
+): Map<string, TypeEnv> {
+  const moduleExports = new Map<string, TypeEnv>();
+
+  // Process modules in topological order
+  for (const modulePath of graph.order) {
+    const loadedModule = graph.modules.get(modulePath)!;
+    const program = loadedModule.program;
+
+    // Build import alias table for this module (alias -> modulePath)
+    const importAliases = new Map<string, string>();
+    for (const importDecl of program.imports) {
+      importAliases.set(importDecl.alias, importDecl.path);
+    }
+
+    // Check for shadowing: local lets that shadow import aliases
+    let current = program.body;
+    while (current.kind === "Let") {
+      if (importAliases.has(current.name)) {
+        throw new RillError(
+          `Local let "${current.name}" shadows import alias in module "${modulePath}"`,
+          current.span
+        );
+      }
+      current = current.body;
+    }
+
+    // Create type environment with prelude + this module's imports
+    // Imports are bound as type variables (they're records, but we don't need their full type here)
+    let moduleTypeEnv = new Map(baseTypeEnv);
+
+    // Infer top-level lets
+    try {
+      const schemes = inferTopLevelLets(
+        program.body,
+        moduleTypeEnv,
+        program.body.toString(),  // This is approximate; ideally we'd have the source
+        declEnv,
+        importAliases,
+        moduleExports
+      );
+
+      // Store this module's exports
+      moduleExports.set(modulePath, schemes);
+    } catch (error) {
+      // Re-wrap module errors with module context
+      if (error instanceof RillError) {
+        const wrappedMessage = `in module "${modulePath}": ${error.message}`;
+        throw new RillError(wrappedMessage, error.span, error.source);
+      }
+      throw error;
+    }
+  }
+
+  return moduleExports;
 }

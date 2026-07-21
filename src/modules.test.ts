@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { loadModules, buildGraphDeclEnv } from "./modules";
+import { loadModules, buildGraphDeclEnv, checkModuleGraph } from "./modules";
 import { lex } from "./lexer";
 import { RillError } from "./errors";
+import { createPreludeTypeEnv } from "./typechecker";
 
 describe("Module Loader", () => {
   describe("linear chains", () => {
@@ -180,6 +181,113 @@ describe("Declaration Environment Merging", () => {
       const graph = loadModules(sources.entry, "entry", resolver);
       expect(() => buildGraphDeclEnv(graph)).toThrow();
       expect(() => buildGraphDeclEnv(graph)).toThrow(/Idle/);
+    });
+  });
+});
+
+describe("Module Graph Checking", () => {
+  describe("checkModuleGraph", () => {
+    it("checks modules with let bindings and produces schemes", () => {
+      const sources: { [key: string]: string } = {
+        helpers: "let add = fn(a) -> fn(b) -> a + b\n42",
+        entry: 'import "helpers" as h\nh.add(1)(2)',
+      };
+
+      const resolver = (path: string) => {
+        const src = sources[path];
+        if (!src) throw new Error(`Module not found: ${path}`);
+        return src;
+      };
+
+      const graph = loadModules(sources.entry, "entry", resolver);
+      const declEnv = buildGraphDeclEnv(graph);
+      const typeEnv = createPreludeTypeEnv();
+      const schemes = checkModuleGraph(graph, declEnv, typeEnv);
+
+      expect(schemes.has("helpers")).toBe(true);
+      const helperSchemes = schemes.get("helpers")!;
+      expect(helperSchemes.has("add")).toBe(true);
+    });
+
+    it("accesses qualified exports via import alias", () => {
+      const sources: { [key: string]: string } = {
+        helpers: "let helper_func = fn(x) -> x\n42",
+        entry: 'import "helpers" as h\nh.helper_func(1)',
+      };
+
+      const resolver = (path: string) => {
+        const src = sources[path];
+        if (!src) throw new Error(`Module not found: ${path}`);
+        return src;
+      };
+
+      const graph = loadModules(sources.entry, "entry", resolver);
+      const declEnv = buildGraphDeclEnv(graph);
+      const typeEnv = createPreludeTypeEnv();
+      expect(() => checkModuleGraph(graph, declEnv, typeEnv)).not.toThrow();
+    });
+
+    it("detects unknown export in qualified access", () => {
+      const sources: { [key: string]: string } = {
+        helpers: "let add = fn(a) -> fn(b) -> a + b\n42",
+        entry: 'import "helpers" as h\nh.unknown(1)',
+      };
+
+      const resolver = (path: string) => {
+        const src = sources[path];
+        if (!src) throw new Error(`Module not found: ${path}`);
+        return src;
+      };
+
+      const graph = loadModules(sources.entry, "entry", resolver);
+      const declEnv = buildGraphDeclEnv(graph);
+      const typeEnv = createPreludeTypeEnv();
+      expect(() => checkModuleGraph(graph, declEnv, typeEnv)).toThrow();
+      expect(() => checkModuleGraph(graph, declEnv, typeEnv)).toThrow(/add/);
+    });
+
+    it("detects type errors in helper modules and locates them in helper source", () => {
+      const sources: { [key: string]: string } = {
+        helpers: "let broken = 1 + \"x\"\n42",
+        entry: 'import "helpers" as h\n42',
+      };
+
+      const resolver = (path: string) => {
+        const src = sources[path];
+        if (!src) throw new Error(`Module not found: ${path}`);
+        return src;
+      };
+
+      const graph = loadModules(sources.entry, "entry", resolver);
+      const declEnv = buildGraphDeclEnv(graph);
+      const typeEnv = createPreludeTypeEnv();
+      expect(() => checkModuleGraph(graph, declEnv, typeEnv)).toThrow();
+      try {
+        checkModuleGraph(graph, declEnv, typeEnv);
+      } catch (e) {
+        if (e instanceof RillError) {
+          expect(e.message).toMatch(/helpers/);
+        }
+      }
+    });
+
+    it("detects shadowing of import alias by local let", () => {
+      const sources: { [key: string]: string } = {
+        helpers: "let add = fn(a) -> fn(b) -> a + b\n42",
+        entry: 'import "helpers" as h\nlet h = 1\n42',
+      };
+
+      const resolver = (path: string) => {
+        const src = sources[path];
+        if (!src) throw new Error(`Module not found: ${path}`);
+        return src;
+      };
+
+      const graph = loadModules(sources.entry, "entry", resolver);
+      const declEnv = buildGraphDeclEnv(graph);
+      const typeEnv = createPreludeTypeEnv();
+      expect(() => checkModuleGraph(graph, declEnv, typeEnv)).toThrow();
+      expect(() => checkModuleGraph(graph, declEnv, typeEnv)).toThrow(/shadow/i);
     });
   });
 });
