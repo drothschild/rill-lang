@@ -7,7 +7,10 @@ export type { Program, RuleHeader, RuleParam } from './parser';
 export { checkRuleSource } from './rules';
 export type { RuleCheckResult, CheckRuleOptions } from './rules';
 export { Value, prettyPrint } from './values';
-export { runSource, createFsResolver } from './runner';
+// createFsResolver is intentionally NOT exported here: it needs node:fs, and
+// lib.ts must stay platform-neutral for bundled runtimes (see lib.test.ts).
+// Node consumers import it from "rill-lang/fs-resolver".
+export { runSource } from './runner';
 
 // Module system API for embedders.
 export type { Resolver } from './modules';

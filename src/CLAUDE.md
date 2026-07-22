@@ -17,6 +17,11 @@ inferencer, evaluator, and state machine engine.
   constructor namespace + `Type`); canonical JS↔Rill bridge (`jsToRill`,
   `rillToJs`, `BridgeError`); and state machine engine (`createEngine`,
   `TransitionError`, `Engine`, `EngineConfig`).
+- **`lib.ts`'s import graph is platform-neutral** — no Node built-ins anywhere
+  in it (enforced by `lib.test.ts`). Embedders bundle it for non-Node runtimes
+  (React Native/Metro, browsers), and bundlers resolve the whole graph eagerly.
+  Node-only helpers live behind subpath exports: `createFsResolver` is
+  `rill-lang/fs-resolver` (`fsResolver.ts`), not part of `lib.ts`.
 - **`Scheme` is intentionally NOT exported** — it is opaque to embedders.
   Build environments via `createPreludeTypeEnv()` + `bindType(env, name, type)`,
   never by constructing schemes directly.
