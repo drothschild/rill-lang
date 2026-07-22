@@ -3,7 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { ReplSession } from "./repl";
-import { runSource, createFsResolver } from "./runner";
+import { runSource } from "./runner";
+import { createFsResolver } from "./fsResolver";
 
 const args = process.argv.slice(2);
 

@@ -1,5 +1,3 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
 import { lex } from "./lexer";
 import { parseProgram } from "./parser";
 import { evaluate, evaluateProgram } from "./evaluator";
@@ -19,30 +17,6 @@ interface RunResult {
 interface RunOptions {
   resolve?: Resolver;
   path?: string;
-}
-
-/**
- * Creates a filesystem resolver that resolves import paths relative to a base directory.
- * Appends .lv extension if the import path has no extension.
- * When fromPath is provided, resolves relative to that file's directory;
- * otherwise resolves relative to baseDir.
- * Maintains backward compatibility for single-arg resolvers (in-memory test resolvers).
- */
-export function createFsResolver(baseDir: string): Resolver {
-  return (importPath: string, fromPath?: string) => {
-    // Append .lv extension if no extension present
-    const fullPath = importPath.includes(".") ? importPath : `${importPath}.lv`;
-
-    // If fromPath is provided, resolve relative to that file's directory
-    // Otherwise resolve relative to baseDir
-    let resolveDir = baseDir;
-    if (fromPath) {
-      resolveDir = path.dirname(path.resolve(baseDir, fromPath));
-    }
-
-    const resolvedPath = path.resolve(resolveDir, fullPath);
-    return fs.readFileSync(resolvedPath, "utf-8");
-  };
 }
 
 export function runSource(source: string, options?: RunOptions): RunResult {
